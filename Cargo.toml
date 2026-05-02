@@ -1,0 +1,9 @@
+[package]
+name = "db-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+zerocopy = { version = "0.8.48", features = ["derive"] }
