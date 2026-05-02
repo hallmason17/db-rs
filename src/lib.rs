@@ -1,0 +1,36 @@
+use std::sync::{Arc, RwLock};
+
+use thiserror::Error;
+
+mod buffer_mgr;
+mod storage_mgr;
+pub(crate) const PAGE_SIZE: usize = 4096;
+
+#[allow(dead_code)]
+pub struct FrameHandle {
+    page_number: u64,
+    data: Arc<RwLock<[u8; PAGE_SIZE]>>,
+}
+
+#[derive(Error, Debug)]
+pub enum DbError {
+    #[error("IO error:")]
+    Io(#[from] std::io::Error),
+
+    #[error("page not found")]
+    PageNotFound,
+
+    #[error("no more tuples")]
+    NoMoreTuples,
+
+    #[error("no table named `{0}`")]
+    TableNotFound(String),
+
+    #[error("corrupt page file")]
+    CorruptPageFile,
+
+    #[error("unknown error")]
+    Unknown,
+}
+
+type DbResult<T> = Result<T, DbError>;
