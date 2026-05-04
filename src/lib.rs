@@ -7,6 +7,12 @@ mod storage_mgr;
 mod tables;
 pub(crate) const PAGE_SIZE: usize = 4096;
 
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+pub struct PageId {
+    pub table_id: u32,
+    pub page_num: u32,
+}
+
 #[allow(dead_code)]
 pub struct FrameHandle {
     page_number: u64,

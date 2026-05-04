@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::OpenOptions,
     io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::FileExt,
@@ -6,10 +7,11 @@ use std::{
 };
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::{DbError, DbResult, PAGE_SIZE};
+use crate::{DbError, DbResult, PAGE_SIZE, PageId};
 
 #[allow(dead_code)]
 pub struct StorageManager {
+    file_map: HashMap<u32, std::fs::File>,
     page_file: std::fs::File,
     page_file_path: PathBuf,
     footer: PageFileFooter,
@@ -60,36 +62,37 @@ impl StorageManager {
             PageFileFooter::read_from_bytes(&buffer).map_err(|_| DbError::CorruptPageFile)?;
 
         Ok(Self {
+            file_map: HashMap::new(),
             page_file: file,
             page_file_path: path.to_path_buf(),
             footer,
         })
     }
-    pub fn destroy_page_file(&self) -> DbResult<()> {
+    pub fn destroy_page_file(&self, _table_id: u32) -> DbResult<()> {
         if self.page_file_path.exists() {
             std::fs::remove_file(&self.page_file_path)?;
         }
         Ok(())
     }
 
-    pub fn read_block(&self, block_num: u64, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
-        if block_num > (self.footer.num_pages - 1) as u64 {
+    pub fn read_block(&self, block: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
+        if block.page_num > (self.footer.num_pages - 1) {
             return Err(DbError::PageNotFound);
         }
-        let offset = block_num as usize * PAGE_SIZE;
+        let offset = block.page_num as usize * PAGE_SIZE;
         self.page_file
             .read_exact_at(page_handle.as_mut_slice(), offset as u64)?;
         Ok(())
     }
-    pub fn write_block(&mut self, block_num: u64, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
-        let offset = block_num as usize * PAGE_SIZE;
+    pub fn write_block(&mut self, block: &PageId, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
+        let offset = block.page_num as usize * PAGE_SIZE;
         self.page_file
             .write_at(page_handle.as_slice(), offset as u64)?;
         self.page_file.flush()?;
         Ok(())
     }
 
-    pub fn append_empty_block(&mut self) -> DbResult<()> {
+    pub fn append_empty_block(&mut self, _table_id: u32) -> DbResult<()> {
         let empty_block = [0u8; PAGE_SIZE];
         let offset = self.footer.num_pages as usize * PAGE_SIZE;
 
@@ -103,9 +106,9 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn ensure_capacity(&mut self, number_of_pages: u32) -> DbResult<()> {
+    pub fn ensure_capacity(&mut self, table_id: u32, number_of_pages: u32) -> DbResult<()> {
         while self.footer.num_pages < number_of_pages {
-            self.append_empty_block()?
+            self.append_empty_block(table_id)?
         }
         Ok(())
     }
@@ -148,10 +151,16 @@ mod tests {
 
         StorageManager::create_page_file(&path).unwrap();
 
-        let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
+        let pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
         let mut page_handle = Box::new([1u8; PAGE_SIZE]);
         pagefile
-            .read_block(0, &mut page_handle)
+            .read_block(
+                &PageId {
+                    table_id: 0,
+                    page_num: 0,
+                },
+                &mut page_handle,
+            )
             .expect("Failed to read block");
         assert_eq!(&page_handle.as_slice(), &[0u8; 4096]);
     }
@@ -166,11 +175,23 @@ mod tests {
         let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
         let mut page_handle = Box::new([1u8; PAGE_SIZE]);
         pagefile
-            .write_block(0, &page_handle)
+            .write_block(
+                &PageId {
+                    table_id: 0,
+                    page_num: 0,
+                },
+                &page_handle,
+            )
             .expect("Couldn't write to block 0");
 
         pagefile
-            .read_block(0, &mut page_handle)
+            .read_block(
+                &PageId {
+                    table_id: 0,
+                    page_num: 0,
+                },
+                &mut page_handle,
+            )
             .expect("Failed to read block");
         assert_eq!(&page_handle.as_slice(), &[1u8; 4096]);
     }
@@ -184,7 +205,7 @@ mod tests {
 
         let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
         pagefile
-            .append_empty_block()
+            .append_empty_block(0)
             .expect("Couldn't append empty");
 
         assert_eq!(
@@ -193,7 +214,13 @@ mod tests {
         );
         let mut page_handle = Box::new([1u8; PAGE_SIZE]);
         pagefile
-            .read_block(1, &mut page_handle)
+            .read_block(
+                &PageId {
+                    table_id: 0,
+                    page_num: 1,
+                },
+                &mut page_handle,
+            )
             .expect("Failed to read block");
         assert_eq!(&page_handle.as_slice(), &[0u8; 4096]);
     }
@@ -207,7 +234,7 @@ mod tests {
 
         let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
         pagefile
-            .ensure_capacity(15)
+            .ensure_capacity(0, 15)
             .expect("Couldn't ensure capacity");
         assert_eq!(pagefile.footer.num_pages, 15);
         assert_eq!(

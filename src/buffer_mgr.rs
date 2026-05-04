@@ -9,7 +9,7 @@ use std::{
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::{DbError, DbResult, PAGE_SIZE, storage_mgr::StorageManager};
+use crate::{DbError, DbResult, PAGE_SIZE, PageId, storage_mgr::StorageManager};
 
 #[allow(dead_code)]
 pub struct FrameHandle<'a> {
@@ -58,7 +58,6 @@ impl Default for Frame {
 }
 
 type FrameNum = u64;
-type PageNum = u64;
 
 pub struct BufferPool {
     page_file: PathBuf,
@@ -66,14 +65,14 @@ pub struct BufferPool {
     frames: Vec<Frame>,
     clock_hand: AtomicUsize,
     free_frames: Mutex<Vec<usize>>,
-    page_to_frame_map: RwLock<HashMap<PageNum, FrameNum>>,
-    frame_to_page_map: RwLock<HashMap<FrameNum, PageNum>>,
+    page_to_frame_map: RwLock<HashMap<PageId, FrameNum>>,
+    frame_to_page_map: RwLock<HashMap<FrameNum, PageId>>,
     storage_mgr: RwLock<StorageManager>,
 }
 
 struct FrameTableEntry {
     frame: u64,
-    page: u64,
+    page: PageId,
 }
 
 impl BufferPool {
@@ -101,9 +100,9 @@ impl BufferPool {
             storage_mgr: RwLock::new(storage_mgr),
         }
     }
-    fn find_entry_in_map(&self, page_num: u64) -> Option<FrameTableEntry> {
+    fn find_entry_in_map(&self, page_id: &PageId) -> Option<FrameTableEntry> {
         let map = self.page_to_frame_map.read();
-        map.get_key_value(&page_num).map(|entry| FrameTableEntry {
+        map.get_key_value(page_id).map(|entry| FrameTableEntry {
             page: *entry.0,
             frame: *entry.1,
         })
@@ -163,35 +162,31 @@ impl BufferPool {
             && frame.dirty.load(Ordering::Relaxed)
         {
             let mut sm = self.storage_mgr.write();
-            sm.write_block(page, &frame.data.read())?;
+            sm.write_block(&page, &frame.data.read())?;
         }
 
         Ok(())
     }
-    pub fn pin_page(&self, page_num: PageNum) -> DbResult<FrameHandle<'_>> {
+    pub fn pin_page(&self, page_id: &PageId) -> DbResult<FrameHandle<'_>> {
         // Check the map first
-        if let Some(entry) = self.find_entry_in_map(page_num) {
+        if let Some(entry) = self.find_entry_in_map(page_id) {
             let frame = &self.frames[entry.frame as usize];
             frame.pin_count.fetch_add(1, Ordering::Relaxed);
             frame.clock_flag.fetch_or(true, Ordering::Relaxed);
             Ok(FrameHandle { frame })
         } else if let Some(frame_index) = self.select_victim() {
-            let frame = &self.frames[frame_index];
+            let frame = &self.frames[frame_index as usize];
             self.evict_page(frame_index as FrameNum)?;
 
-            self.frame_to_page_map
-                .write()
-                .insert(frame_index as u64, page_num);
-            self.page_to_frame_map
-                .write()
-                .insert(page_num, frame_index as u64);
+            self.frame_to_page_map.write().insert(frame_index, *page_id);
+            self.page_to_frame_map.write().insert(*page_id, frame_index);
 
             frame.clock_flag.store(true, Ordering::Relaxed);
             frame.pin_count.fetch_add(1, Ordering::Relaxed);
 
             let mut data = frame.data.write();
             self.storage_mgr.read().read_block(
-                page_num,
+                page_id,
                 data.as_mut_array()
                     .expect("couldn't write to frame buffer!"),
             )?;
@@ -212,7 +207,8 @@ mod tests {
         let path = dir.path().join("test.page");
         StorageManager::create_page_file(&path).expect("failed to create page file");
         let mut sm = StorageManager::open_page_file(&path).expect("failed to open page file");
-        sm.ensure_capacity(31).expect("couldn't expand page file!");
+        sm.ensure_capacity(0, 31)
+            .expect("couldn't expand page file!");
         BufferPool::new(num_pages, ReplacementStrategy::Clock, path)
     }
 
@@ -228,16 +224,49 @@ mod tests {
         let bp = setup_bp(3);
 
         {
-            let handle = bp.pin_page(0).expect("Should pin page 0");
+            let handle = bp
+                .pin_page(&PageId {
+                    table_id: 0,
+                    page_num: 0,
+                })
+                .expect("Should pin page 0");
             assert_eq!(handle.frame.pin_count.load(Ordering::Relaxed), 1);
-            assert!(bp.page_to_frame_map.read().get(&0).is_some());
+            assert!(
+                bp.page_to_frame_map
+                    .read()
+                    .get(&PageId {
+                        table_id: 0,
+                        page_num: 0
+                    })
+                    .is_some()
+            );
 
-            let handle2 = bp.pin_page(0).expect("Should pin page 0 again");
+            let handle2 = bp
+                .pin_page(&PageId {
+                    table_id: 0,
+                    page_num: 0,
+                })
+                .expect("Should pin page 0 again");
             assert!(handle2.frame.pin_count.load(Ordering::Relaxed) >= 1);
-            assert!(bp.page_to_frame_map.read().get(&0).is_some());
+            assert!(
+                bp.page_to_frame_map
+                    .read()
+                    .get(&PageId {
+                        table_id: 0,
+                        page_num: 0
+                    })
+                    .is_some()
+            );
         }
 
-        let frame_idx = *bp.page_to_frame_map.read().get(&0).unwrap();
+        let frame_idx = *bp
+            .page_to_frame_map
+            .read()
+            .get(&PageId {
+                table_id: 0,
+                page_num: 0,
+            })
+            .unwrap();
         assert_eq!(
             bp.frames[frame_idx as usize]
                 .pin_count
@@ -251,15 +280,28 @@ mod tests {
         let bp = setup_bp(2);
 
         {
-            let _h1 = bp.pin_page(10).unwrap();
-            let _h2 = bp.pin_page(20).unwrap();
+            let _h1 = bp
+                .pin_page(&PageId {
+                    table_id: 0,
+                    page_num: 10,
+                })
+                .unwrap();
+            let _h2 = bp
+                .pin_page(&PageId {
+                    table_id: 0,
+                    page_num: 20,
+                })
+                .unwrap();
         }
-        bp.pin_page(30)
-            .expect("Should evict a page to make room for page 30");
+        bp.pin_page(&PageId {
+            table_id: 0,
+            page_num: 30,
+        })
+        .expect("Should evict a page to make room for page 30");
 
         let map = bp.page_to_frame_map.read();
         println!("{:?}", map);
-        assert!(map.keys().any(|&v| v == 30));
+        assert!(map.keys().any(|&v| v.page_num == 30));
         assert_eq!(map.len(), 2);
     }
 
@@ -267,10 +309,23 @@ mod tests {
     fn test_all_pages_pinned_error() {
         let bp = setup_bp(2);
 
-        let _h1 = bp.pin_page(1).unwrap();
-        let _h2 = bp.pin_page(2).unwrap();
+        let _h1 = bp
+            .pin_page(&PageId {
+                table_id: 0,
+                page_num: 1,
+            })
+            .unwrap();
+        let _h2 = bp
+            .pin_page(&PageId {
+                table_id: 0,
+                page_num: 2,
+            })
+            .unwrap();
 
-        let result = bp.pin_page(3);
+        let result = bp.pin_page(&PageId {
+            table_id: 0,
+            page_num: 3,
+        });
         assert!(result.is_err(), "Should fail when no victims are available");
     }
 }

@@ -1,5 +1,9 @@
+use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+use crate::DbError;
+
 pub struct RecordId {
-    page: u64,
+    page: u32,
     slot: u32,
 }
 
@@ -8,6 +12,8 @@ pub struct Record {
     data: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+#[repr(u8)]
 pub enum DataType {
     Int,
     String,
@@ -24,13 +30,74 @@ pub enum Value {
     Null,
 }
 
+#[repr(C)]
 pub struct ColumnDefinition {
     name: String,
     data_type: DataType,
     is_key: bool,
 }
+impl ColumnDefinition {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![];
+        let name_len = self.name.len();
+        bytes.extend_from_slice(&name_len.to_be_bytes());
+        bytes.extend_from_slice(self.name.as_bytes());
+        bytes.push(self.data_type as u8);
+        bytes.push(self.is_key as u8);
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            name: String::new(),
+            data_type: DataType::Null,
+            is_key: false,
+        }
+    }
+}
 
 pub struct TableSchema {
     name: String,
     attributes: Vec<ColumnDefinition>,
+}
+impl TableSchema {
+    pub fn new(name: &str, attributes: Vec<ColumnDefinition>) -> Self {
+        Self {
+            name: name.to_string(),
+            attributes,
+        }
+    }
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![];
+        let name_len = self.name.len() as u32;
+        bytes.extend_from_slice(&name_len.to_be_bytes());
+        bytes.extend_from_slice(self.name.as_bytes());
+
+        let num_attrs = self.attributes.len() as u32;
+        bytes.extend_from_slice(&num_attrs.to_be_bytes());
+        for attr in self.attributes.iter() {
+            let attr_bytes = attr.as_bytes();
+            bytes.extend_from_slice(&attr_bytes);
+        }
+        bytes
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut data = &bytes[..];
+        let name_len = u32::from_be_bytes(data[..4].try_into().expect("couldnt get name_len"));
+        data = &data[4..];
+
+        let name = String::from_utf8_lossy(data[..name_len as usize].try_into().unwrap());
+        data = &data[name_len as usize..];
+        let num_attrs = u32::from_be_bytes(bytes[..4].try_into().unwrap());
+        data = &data[4..];
+        let mut attrs = Vec::new();
+        for _ in 0..num_attrs {
+            let attr = ColumnDefinition::from_bytes(data);
+            attrs.push(attr);
+        }
+        Self {
+            name: name.to_string(),
+            attributes: attrs,
+        }
+    }
 }
