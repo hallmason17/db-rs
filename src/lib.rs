@@ -4,6 +4,7 @@ use thiserror::Error;
 
 mod buffer_mgr;
 mod storage_mgr;
+mod tables;
 pub(crate) const PAGE_SIZE: usize = 4096;
 
 #[allow(dead_code)]
