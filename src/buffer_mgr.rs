@@ -108,39 +108,40 @@ impl BufferPool {
             frame: *entry.1,
         })
     }
-    fn select_victim(&self) -> Option<usize> {
+    fn select_victim_clock(&self) -> Option<FrameNum> {
+        for _ in 0..self.frames.len() * 4 {
+            let clock_hand = self.clock_hand.load(Ordering::Relaxed);
+            let new_clock_hand = (clock_hand + 1) % self.frames.len();
+            if self
+                .clock_hand
+                .compare_exchange_weak(
+                    clock_hand,
+                    new_clock_hand,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_err()
+            {
+                continue;
+            }
+
+            let frame = &self.frames[clock_hand];
+            if frame.pin_count.load(Ordering::Acquire) == 0 {
+                if frame.clock_flag.load(Ordering::Relaxed) {
+                    frame.clock_flag.store(false, Ordering::Relaxed);
+                } else {
+                    return Some(clock_hand as FrameNum);
+                }
+            }
+        }
+        None
+    }
+    fn select_victim(&self) -> Option<FrameNum> {
         if !self.free_frames.lock().is_empty() {
-            self.free_frames.lock().pop()
+            self.free_frames.lock().pop().map(|x| x as FrameNum)
         } else {
             match self.replacement_strategy {
-                ReplacementStrategy::Clock => {
-                    for _ in 0..self.frames.len() * 2 {
-                        let clock_hand = self.clock_hand.load(Ordering::Relaxed);
-                        let new_clock_hand = (clock_hand + 1) % self.frames.len();
-                        if self
-                            .clock_hand
-                            .compare_exchange_weak(
-                                clock_hand,
-                                new_clock_hand,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            )
-                            .is_err()
-                        {
-                            continue;
-                        }
-
-                        let frame = &self.frames[clock_hand];
-                        if frame.pin_count.load(Ordering::Acquire) == 0 {
-                            if frame.clock_flag.load(Ordering::Relaxed) {
-                                frame.clock_flag.store(false, Ordering::Relaxed);
-                            } else {
-                                return Some(clock_hand);
-                            }
-                        }
-                    }
-                    None
-                }
+                ReplacementStrategy::Clock => self.select_victim_clock(),
                 _ => None,
             }
         }
