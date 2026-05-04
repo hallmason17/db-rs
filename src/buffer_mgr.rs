@@ -32,7 +32,7 @@ pub enum ReplacementStrategy {
 
 #[allow(dead_code)]
 pub struct Frame {
-    pub page_number: u64,
+    pub page_id: PageId,
     pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
     pin_count: AtomicI32,
     clock_flag: AtomicBool,
@@ -226,7 +226,7 @@ mod tests {
         {
             let handle = bp
                 .pin_page(&PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 0,
                 })
                 .expect("Should pin page 0");
@@ -235,7 +235,7 @@ mod tests {
                 bp.page_to_frame_map
                     .read()
                     .get(&PageId {
-                        table_id: 0,
+                        file_id: 0,
                         page_num: 0
                     })
                     .is_some()
@@ -243,7 +243,7 @@ mod tests {
 
             let handle2 = bp
                 .pin_page(&PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 0,
                 })
                 .expect("Should pin page 0 again");
@@ -252,7 +252,7 @@ mod tests {
                 bp.page_to_frame_map
                     .read()
                     .get(&PageId {
-                        table_id: 0,
+                        file_id: 0,
                         page_num: 0
                     })
                     .is_some()
@@ -263,7 +263,7 @@ mod tests {
             .page_to_frame_map
             .read()
             .get(&PageId {
-                table_id: 0,
+                file_id: 0,
                 page_num: 0,
             })
             .unwrap();
@@ -282,19 +282,19 @@ mod tests {
         {
             let _h1 = bp
                 .pin_page(&PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 10,
                 })
                 .unwrap();
             let _h2 = bp
                 .pin_page(&PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 20,
                 })
                 .unwrap();
         }
         bp.pin_page(&PageId {
-            table_id: 0,
+            file_id: 0,
             page_num: 30,
         })
         .expect("Should evict a page to make room for page 30");
@@ -311,19 +311,19 @@ mod tests {
 
         let _h1 = bp
             .pin_page(&PageId {
-                table_id: 0,
+                file_id: 0,
                 page_num: 1,
             })
             .unwrap();
         let _h2 = bp
             .pin_page(&PageId {
-                table_id: 0,
+                file_id: 0,
                 page_num: 2,
             })
             .unwrap();
 
         let result = bp.pin_page(&PageId {
-            table_id: 0,
+            file_id: 0,
             page_num: 3,
         });
         assert!(result.is_err(), "Should fail when no victims are available");

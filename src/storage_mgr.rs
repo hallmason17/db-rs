@@ -1,20 +1,25 @@
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
 };
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::{DbError, DbResult, PAGE_SIZE, PageId};
+use crate::{DbError, DbResult, PageId, PAGE_SIZE};
+
+struct FileInfo {
+    file: File,
+    metadata: PageFileFooter,
+}
 
 #[allow(dead_code)]
 pub struct StorageManager {
-    file_map: HashMap<u32, std::fs::File>,
-    page_file: std::fs::File,
-    page_file_path: PathBuf,
-    footer: PageFileFooter,
+    file_map: HashMap<u32, FileInfo>,
+    path_map: HashMap<PathBuf, u32>,
+    next_id: u32,
+    pub base_path: PathBuf,
 }
 
 #[derive(IntoBytes, FromBytes, Immutable)]
@@ -25,6 +30,132 @@ pub struct PageFileFooter {
 
 #[allow(dead_code)]
 impl StorageManager {
+    /// Create a StorageManager and open the catalog.db file or create one if it doesn't exist
+    pub fn new(base_path: &Path) -> DbResult<Self> {
+        let mut file_map = HashMap::new();
+        let mut path_map = HashMap::new();
+        let catalog_path = base_path.join("catalog.db");
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&catalog_path)?;
+
+        let metadata = file.metadata().expect("couldn't get file metadata");
+        let footer = if metadata.len() >= std::mem::size_of::<PageFileFooter>() as u64 {
+            let footer_size = std::mem::size_of::<PageFileFooter>();
+            let mut buffer = [0u8; std::mem::size_of::<PageFileFooter>()];
+            file.seek(SeekFrom::End(-(footer_size as i64)))?;
+            file.read_exact(&mut buffer)?;
+            PageFileFooter::read_from_bytes(&buffer).unwrap_or(PageFileFooter { num_pages: 0 })
+        } else {
+            PageFileFooter { num_pages: 0 }
+        };
+
+        file_map.insert(
+            0,
+            FileInfo {
+                file,
+                metadata: footer,
+            },
+        );
+        path_map.insert(catalog_path, 0);
+
+        Ok(Self {
+            file_map,
+            path_map,
+            next_id: 1,
+            base_path: base_path.to_path_buf(),
+        })
+    }
+
+    /// Opens a db file and returns a file_id
+    pub fn open_file(&mut self, path: &Path) -> DbResult<u32> {
+        let full_path = self.base_path.join(path);
+        if let Some(id) = self.path_map.get(&full_path) {
+            return Ok(*id);
+        }
+        let mut file = File::open(&full_path)?;
+        let id = self.next_id;
+
+        let footer_size = std::mem::size_of::<PageFileFooter>();
+        let mut buffer = [0u8; size_of::<PageFileFooter>()];
+
+        _ = file.seek(SeekFrom::End(-(footer_size as i64)));
+        file.read_exact(&mut buffer)?;
+
+        let footer =
+            PageFileFooter::read_from_bytes(&buffer).map_err(|_| DbError::CorruptPageFile)?;
+
+        self.file_map.insert(
+            id,
+            FileInfo {
+                file,
+                metadata: footer,
+            },
+        );
+        self.path_map.insert(full_path, id);
+        self.next_id += 1;
+        Ok(id)
+    }
+
+    pub fn read_block(&self, page_id: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
+        if let Some(fileinfo) = self.file_map.get(&page_id.file_id) {
+            if page_id.page_num > (fileinfo.metadata.num_pages - 1) {
+                return Err(DbError::PageNotFound);
+            }
+            let offset = page_id.page_num as usize * PAGE_SIZE;
+            fileinfo
+                .file
+                .read_exact_at(page_handle.as_mut_slice(), offset as u64)?;
+            return Ok(());
+        }
+        Err(DbError::FileNotFound)
+    }
+
+    pub fn write_block(&mut self, page_id: &PageId, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
+        if let Some(fileinfo) = self.file_map.get_mut(&page_id.file_id) {
+            let offset = page_id.page_num as usize * PAGE_SIZE;
+            fileinfo
+                .file
+                .write_at(page_handle.as_slice(), offset as u64)?;
+            fileinfo.file.flush()?;
+            return Ok(());
+        }
+        Err(DbError::FileNotFound)
+    }
+
+    pub fn append_empty_block(&mut self, file_id: u32) -> DbResult<()> {
+        if let Some(fileinfo) = self.file_map.get_mut(&file_id) {
+            let empty_block = [0u8; PAGE_SIZE];
+            let offset = fileinfo.metadata.num_pages as usize * PAGE_SIZE;
+
+            fileinfo.file.write_at(&empty_block, offset as u64)?;
+
+            fileinfo.metadata.num_pages += 1;
+            fileinfo.file.seek(SeekFrom::End(0))?;
+            _ = fileinfo.file.write(fileinfo.metadata.as_bytes())?;
+
+            fileinfo.file.flush()?;
+            return Ok(());
+        }
+        Err(DbError::FileNotFound)
+    }
+
+    pub fn ensure_capacity(&mut self, file_id: u32, number_of_pages: u32) -> DbResult<()> {
+        let mut num_pages = match self.file_map.get(&file_id) {
+            Some(info) => info.metadata.num_pages,
+            None => return Err(DbError::FileNotFound),
+        };
+        while num_pages < number_of_pages {
+            self.append_empty_block(file_id)?;
+            num_pages = self.file_map.get(&file_id).unwrap().metadata.num_pages;
+        }
+        Ok(())
+    }
+    /*
+     *
     pub fn create_page_file(path: &Path) -> DbResult<()> {
         if !path.exists() {
             let mut file = OpenOptions::new()
@@ -63,55 +194,18 @@ impl StorageManager {
 
         Ok(Self {
             file_map: HashMap::new(),
-            page_file: file,
+            next_id: 0,
             page_file_path: path.to_path_buf(),
             footer,
         })
     }
-    pub fn destroy_page_file(&self, _table_id: u32) -> DbResult<()> {
+    pub fn destroy_page_file(&self, _file_id: u32) -> DbResult<()> {
         if self.page_file_path.exists() {
             std::fs::remove_file(&self.page_file_path)?;
         }
         Ok(())
     }
-
-    pub fn read_block(&self, block: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
-        if block.page_num > (self.footer.num_pages - 1) {
-            return Err(DbError::PageNotFound);
-        }
-        let offset = block.page_num as usize * PAGE_SIZE;
-        self.page_file
-            .read_exact_at(page_handle.as_mut_slice(), offset as u64)?;
-        Ok(())
-    }
-    pub fn write_block(&mut self, block: &PageId, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
-        let offset = block.page_num as usize * PAGE_SIZE;
-        self.page_file
-            .write_at(page_handle.as_slice(), offset as u64)?;
-        self.page_file.flush()?;
-        Ok(())
-    }
-
-    pub fn append_empty_block(&mut self, _table_id: u32) -> DbResult<()> {
-        let empty_block = [0u8; PAGE_SIZE];
-        let offset = self.footer.num_pages as usize * PAGE_SIZE;
-
-        self.page_file.write_at(&empty_block, offset as u64)?;
-
-        self.footer.num_pages += 1;
-        self.page_file.seek(SeekFrom::End(0))?;
-        _ = self.page_file.write(self.footer.as_bytes())?;
-
-        self.page_file.flush()?;
-        Ok(())
-    }
-
-    pub fn ensure_capacity(&mut self, table_id: u32, number_of_pages: u32) -> DbResult<()> {
-        while self.footer.num_pages < number_of_pages {
-            self.append_empty_block(table_id)?
-        }
-        Ok(())
-    }
+     */
 }
 #[cfg(test)]
 mod tests {
@@ -156,7 +250,7 @@ mod tests {
         pagefile
             .read_block(
                 &PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 0,
                 },
                 &mut page_handle,
@@ -177,7 +271,7 @@ mod tests {
         pagefile
             .write_block(
                 &PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 0,
                 },
                 &page_handle,
@@ -187,7 +281,7 @@ mod tests {
         pagefile
             .read_block(
                 &PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 0,
                 },
                 &mut page_handle,
@@ -216,7 +310,7 @@ mod tests {
         pagefile
             .read_block(
                 &PageId {
-                    table_id: 0,
+                    file_id: 0,
                     page_num: 1,
                 },
                 &mut page_handle,
