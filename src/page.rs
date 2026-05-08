@@ -1,11 +1,10 @@
 use std::ops::{Deref, DerefMut};
 
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
-use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes, big_endian};
 
-use crate::{PAGE_SIZE, PageGuard};
+use crate::{PAGE_SIZE, PageGuard, header_offsets};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoBytes, Immutable, TryFromBytes)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PageKind {
     Heap = 0,
@@ -48,26 +47,51 @@ pub struct PageEntryId {
     slot: u16,
 }
 
-#[derive(Debug, Clone, IntoBytes, TryFromBytes, Immutable, KnownLayout)]
-#[repr(C, packed(1))]
-pub struct PageHeader {
-    pub kind: PageKind,
-    pub page_id: big_endian::U64,
-    pub num_entries: big_endian::U16,
-}
-impl PageHeader {
-    /*
-    pub fn to_be_bytes(self) -> [u8; size_of::<Self>()] {
-        let mut bytes = [0u8; size_of::<Self>()];
-        bytes[0..8].copy_from_slice(&self.page_id.to_be_bytes());
-        bytes[8] = match self.kind {
-            PageKind::Heap => 0,
-            PageKind::Catalog => 0,
-        };
-        bytes[9..11].copy_from_slice(&self.num_entries.to_be_bytes());
-        bytes
+#[derive(Debug)]
+pub struct PageHeaderView<'a>(&'a [u8]);
+pub struct PageHeaderMut<'a>(&'a mut [u8]);
+pub trait PageHeaderReader {
+    fn data(&self) -> &[u8];
+
+    fn page_id(&self) -> u64 {
+        u64::from_be_bytes(
+            self.data()[header_offsets::ID..header_offsets::ID + 8]
+                .try_into()
+                .unwrap(),
+        )
     }
-    */
+
+    fn kind(&self) -> PageKind {
+        match self.data()[header_offsets::KIND] {
+            0 => PageKind::Heap,
+            1 => PageKind::Catalog,
+            _ => unreachable!(),
+        }
+    }
+
+    fn num_entries(&self) -> u16 {
+        u16::from_be_bytes(
+            self.data()[header_offsets::ENTRIES..header_offsets::ENTRIES + 2]
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+impl<'a> PageHeaderReader for PageHeaderView<'a> {
+    fn data(&self) -> &[u8] {
+        self.0
+    }
+}
+impl<'a> PageHeaderReader for PageHeaderMut<'a> {
+    fn data(&self) -> &[u8] {
+        self.0
+    }
+}
+impl<'a> PageHeaderMut<'a> {
+    pub fn set_num_entries(&mut self, val: u16) {
+        self.0[header_offsets::ENTRIES..header_offsets::ENTRIES + 2]
+            .copy_from_slice(&val.to_be_bytes());
+    }
 }
 
 #[derive(Debug)]
@@ -95,17 +119,23 @@ impl<G> Page<G>
 where
     G: DerefMut<Target = [u8; PAGE_SIZE]>,
 {
+    /*
     // casting directly to a header like i do in C
     fn header_mut(&mut self) -> &mut PageHeader {
         PageHeader::try_mut_from_prefix(&mut self.data[..])
             .expect("invalid header")
             .0
     }
+     */
+
+    fn header_mut(&mut self) -> PageHeaderMut<'_> {
+        let header = PageHeaderMut(&mut self.data[..]);
+        header
+    }
 
     pub fn insert(&mut self, data: &[u8]) -> anyhow::Result<PageEntryId> {
-        tracing::debug!("{:?}", self.header());
         let size = data.len();
-        let num_entries = self.num_entries()?;
+        let num_entries = self.header().num_entries();
         let freespace_start = self.get_freespace_start()?;
         let new_freespace_start = freespace_start + size_of::<SlotArrayEntry>() as u16;
         let offset = if num_entries > 0 {
@@ -129,19 +159,20 @@ where
 
         self.data[offset as usize - size..offset as usize].copy_from_slice(&data);
 
-        let header = self.header_mut();
-        header.num_entries.set(num_entries + 1);
+        let mut header = self.header_mut();
+        header.set_num_entries(num_entries + 1);
         Ok(PageEntryId {
-            page: self.id()?,
+            page: self.header().page_id(),
             slot: num_entries,
         })
     }
 
     pub fn get_slot_mut(&mut self, slot_index: u16) -> anyhow::Result<Option<&mut [u8]>> {
-        if slot_index >= self.num_entries()? {
+        if slot_index >= self.header().num_entries() {
             return Ok(None);
         }
-        let sa_offset = size_of::<PageHeader>() + size_of::<SlotArrayEntry>() * slot_index as usize;
+        let sa_offset =
+            size_of::<PageHeaderView>() + size_of::<SlotArrayEntry>() * slot_index as usize;
         let data_offset = u16::from_be_bytes(self.data[sa_offset..sa_offset + 2].try_into()?);
         let data_size = u16::from_be_bytes(self.data[sa_offset + 2..sa_offset + 4].try_into()?);
         Ok(Some(
@@ -154,27 +185,16 @@ impl<G> Page<G>
 where
     G: Deref<Target = [u8; PAGE_SIZE]>,
 {
-    pub fn num_entries(&self) -> anyhow::Result<u16> {
-        Ok(self.header().num_entries.get())
-    }
-    pub fn id(&self) -> anyhow::Result<u64> {
-        Ok(self.header().page_id.get())
-    }
-    pub fn kind(&self) -> anyhow::Result<PageKind> {
-        Ok(self.header().kind)
-    }
-
-    fn header(&self) -> &PageHeader {
-        PageHeader::try_ref_from_prefix(&self.data[..])
-            .expect("invalid header")
-            .0
+    pub fn header(&self) -> PageHeaderView<'_> {
+        let header = PageHeaderView(self.data.as_ref());
+        header
     }
 
     fn get_slot_array_entry(&self, index: u16) -> anyhow::Result<Option<SlotArrayEntry>> {
-        if index >= self.num_entries()? {
+        if index >= self.header().num_entries() {
             anyhow::bail!("out of bounds");
         }
-        let offset = size_of::<PageHeader>() + size_of::<SlotArrayEntry>() * index as usize;
+        let offset = size_of::<PageHeaderView>() + size_of::<SlotArrayEntry>() * index as usize;
         let sa_offset = u16::from_be_bytes(self.data.as_ref()[offset..offset + 2].try_into()?);
         let sa_size = u16::from_be_bytes(self.data.as_ref()[offset + 2..offset + 4].try_into()?);
         Ok(Some(SlotArrayEntry {
@@ -183,18 +203,19 @@ where
         }))
     }
     fn get_freespace_start(&self) -> anyhow::Result<u16> {
-        if self.num_entries()? == 0 {
-            Ok(size_of::<PageHeader>() as u16)
+        if self.header().num_entries() == 0 {
+            Ok(size_of::<PageHeaderView>() as u16)
         } else {
-            Ok(size_of::<PageHeader>() as u16
-                + size_of::<SlotArrayEntry>() as u16 * self.num_entries()?)
+            Ok(size_of::<PageHeaderView>() as u16
+                + size_of::<SlotArrayEntry>() as u16 * self.header().num_entries())
         }
     }
     pub fn get_slot(&self, slot_index: u16) -> anyhow::Result<Option<&[u8]>> {
-        if slot_index >= self.num_entries()? {
+        if slot_index >= self.header().num_entries() {
             return Ok(None);
         }
-        let sa_offset = size_of::<PageHeader>() + size_of::<SlotArrayEntry>() * slot_index as usize;
+        let sa_offset =
+            size_of::<PageHeaderView>() + size_of::<SlotArrayEntry>() * slot_index as usize;
         let data_offset = u16::from_be_bytes(self.data[sa_offset..sa_offset + 2].try_into()?);
         let data_size = u16::from_be_bytes(self.data[sa_offset + 2..sa_offset + 4].try_into()?);
         Ok(Some(

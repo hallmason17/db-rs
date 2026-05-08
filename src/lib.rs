@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::{
     buffer_pool::Frame,
-    page::{PageHeader, PageKind},
+    page::{PageHeaderView, PageKind},
 };
 
 pub mod buffer_pool;
@@ -14,6 +14,11 @@ pub mod catalog;
 pub mod page;
 pub mod storage;
 pub mod tables;
+pub mod header_offsets {
+    pub const ID: usize = 0;
+    pub const KIND: usize = 8;
+    pub const ENTRIES: usize = 9;
+}
 pub(crate) const PAGE_SIZE: usize = 4096;
 pub(crate) const MAGIC_NUMBER: u64 = 0xDBDBDBDB;
 pub(crate) const CATALOG_PAGE_ID: PageId = PageId {
@@ -103,11 +108,10 @@ pub struct PageGuard<'a> {
 
 fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
     let mut data = [0u8; PAGE_SIZE];
-    let header = PageHeader {
-        kind,
-        page_id: page_id.into(),
-        num_entries: 0.into(),
-    };
-    data[..size_of::<PageHeader>()].copy_from_slice(&header.as_bytes());
+    let num_entries: u16 = 0;
+    data[header_offsets::ID..header_offsets::ID + 8].copy_from_slice(&page_id.to_be_bytes());
+    data[header_offsets::KIND] = kind as u8;
+    data[header_offsets::ENTRIES..header_offsets::ENTRIES + 2]
+        .copy_from_slice(&num_entries.to_be_bytes());
     data
 }
