@@ -1,12 +1,32 @@
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::{num::TryFromIntError, sync::Arc};
+use zerocopy::{FromBytes, Immutable, IntoBytes, big_endian};
 
 use thiserror::Error;
 
-mod buffer_mgr;
-mod catalog;
-mod storage_mgr;
-mod tables;
+use crate::{
+    buffer_pool::Frame,
+    page::{PageHeader, PageKind},
+};
+
+pub mod buffer_pool;
+pub mod catalog;
+pub mod page;
+pub mod storage;
+pub mod tables;
 pub(crate) const PAGE_SIZE: usize = 4096;
+pub(crate) const MAGIC_NUMBER: u64 = 0xDBDBDBDB;
+pub(crate) const CATALOG_PAGE_ID: PageId = PageId {
+    file_id: 0,
+    page_num: 0,
+};
+
+#[derive(IntoBytes, FromBytes, Immutable)]
+#[repr(C)]
+pub struct PageFileFooter {
+    magic_number: big_endian::U64,
+    num_pages: big_endian::U32,
+}
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub struct PageId {
@@ -14,15 +34,11 @@ pub struct PageId {
     pub page_num: u32,
 }
 
-#[allow(dead_code)]
-pub struct FrameHandle {
-    page_id: PageId,
-    data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-}
-
 #[derive(Error, Debug)]
 pub enum DbError {
-    #[error("IO error:")]
+    #[error("Int conversion error: ")]
+    IntConversion(#[from] TryFromIntError),
+    #[error("Io error:")]
     Io(#[from] std::io::Error),
 
     #[error("page not found")]
@@ -40,8 +56,58 @@ pub enum DbError {
     #[error("corrupt page file")]
     CorruptPageFile,
 
+    #[error("Input error: ")]
+    InputError(#[from] DbInputError),
     #[error("unknown error")]
     Unknown,
 }
 
+#[derive(Debug)]
+pub enum DbInputError {
+    StringTooLong,
+    OutOfBounds,
+}
+impl std::fmt::Display for DbInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
+}
+
+impl std::error::Error for DbInputError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
+
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        self.source()
+    }
+}
+
 type DbResult<T> = Result<T, DbError>;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct FrameHandle<'a> {
+    pub page_id: PageId,
+    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
+    frame: &'a Frame,
+}
+
+pub struct PageGuard<'a> {
+    handle: FrameHandle<'a>,
+}
+
+fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
+    let mut data = [0u8; PAGE_SIZE];
+    let header = PageHeader {
+        kind,
+        page_id: page_id.into(),
+        num_entries: 0.into(),
+    };
+    data[..size_of::<PageHeader>()].copy_from_slice(&header.as_bytes());
+    data
+}
