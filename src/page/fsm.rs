@@ -172,7 +172,6 @@ mod tests {
     #[test]
     fn test_first_free_page_linear_progression() {
         let mut fsm = MockFsmPage::new(0);
-        let max_pages_per_chunk = fsm.max_pages();
 
         fsm.set_page_full(2);
         fsm.set_page_full(3);
@@ -195,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_global_id_modulo_translation() {
-        let mut fsm = MockFsmPage::new(1); // FSM tracking the second block of pages
+        let mut fsm = MockFsmPage::new(1);
         let max_pages_per_chunk = fsm.max_pages();
 
         let deep_global_page_id = max_pages_per_chunk + 10;
