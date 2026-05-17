@@ -4,7 +4,7 @@ use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     catalog::CatalogManager,
     storage::StorageManager,
-    tables::{ColumnDefinition, DataType, TableSchema},
+    tables::{ColumnDefinition, DataType, Table, TableSchema},
 };
 use parking_lot::RwLock;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -23,8 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ColumnDefinition::new(String::from("email"), DataType::String, true)?,
     ];
     let schema = TableSchema::new(&attributes);
-    cat.write().create_table("users", &schema)?;
-    cat.write().create_table("users1", &schema)?;
+    let _table = Table::new("users", &schema, bm.clone(), cat.clone())?;
     bm.flush_all()?;
     Ok(())
 }

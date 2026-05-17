@@ -1,10 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use parking_lot::RwLock;
 
 use crate::{
-    CATALOG_PAGE_ID, PageId, buffer_pool::BufferPool, page::PageHeaderReader,
-    storage::StorageManager, tables::TableSchema,
+    CATALOG_PAGE_ID,
+    buffer_pool::BufferPool,
+    page::{PageAccessor, PageHeaderReader, SlottedPageMut},
+    storage::StorageManager,
+    tables::TableSchema,
 };
 
 #[derive(Debug)]
@@ -73,6 +76,7 @@ fn get_catalog_schema() -> [ColumnDefinition; 3] {
 }
 */
 
+#[derive(Debug)]
 pub struct CatalogManager {
     tables: HashMap<String, TableSchema>,
     open_files: HashMap<String, u32>,
@@ -90,7 +94,7 @@ impl CatalogManager {
         open_files.insert(String::from("catalog"), 0);
         let bm = buffer_manager.clone();
         let mut page = bm.get_page(CATALOG_PAGE_ID)?;
-        let mut catalog = page.as_catalog_mut();
+        let mut catalog = page.as_catalog_mut()?;
         tracing::debug!("{} entries in catalog!", catalog.header().num_entries());
         for idx in 0..catalog.header().num_entries() {
             let entry = catalog.get_slot_mut(idx)?;
@@ -117,43 +121,58 @@ impl CatalogManager {
 
         Ok(cm)
     }
-    pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> anyhow::Result<()> {
-        let file_name = format!("{name}.db");
-        let path = self.storage_manager.read().base_path.join(&file_name);
-        if path.exists() {
-            return Ok(());
+    pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> anyhow::Result<u32> {
+        let path = self.create_table_file_name(name);
+        if let Some(fid) = self.open_files.get(path.to_str().unwrap()) {
+            return Ok(*fid);
         }
 
-        let mut page = self.buffer_manager.get_page(CATALOG_PAGE_ID)?;
-        let mut catalog = page.as_catalog_mut();
-        self.tables.insert(name.to_string(), schema.clone());
-        let catalog_entry = CatalogEntry {
-            table_name: name.to_string(),
-            file_name,
-            schema: schema.to_be_bytes()?,
-        };
-        let entry_bytes = catalog_entry.to_be_bytes()?;
-        tracing::debug!("Encoded cat_entry: {:?}", entry_bytes);
-        // 1. Write to catalog.db
-        catalog.insert(&entry_bytes)?;
-        // 2. create name.db file, write schema to page 0
-        let fid = self.storage_manager.write().open_or_create_file(&path)?;
-        self.open_files
-            .insert(String::from(path.to_str().unwrap()), fid);
+        if !self.storage_manager.read().file_exists(&path)? {
+            let fid = self.storage_manager.write().open_or_create_file(&path)?;
+            self.open_files.insert(name.to_string(), fid);
 
-        let mut page = self.buffer_manager.get_page(PageId {
-            file_id: fid,
-            page_num: 0,
-        })?;
-        let mut page = page.as_heap_mut();
-        page.insert(&schema.to_be_bytes()?)?;
+            self.tables.insert(name.to_string(), schema.clone());
+            let mut page = self.buffer_manager.get_page(CATALOG_PAGE_ID)?;
+            let mut catalog = page.as_catalog_mut()?;
+            let catalog_entry = CatalogEntry {
+                table_name: name.to_string(),
+                file_name: path.display().to_string(),
+                schema: schema.to_be_bytes()?,
+            };
+            let entry_bytes = catalog_entry.to_be_bytes()?;
+            tracing::debug!("Encoded cat_entry: {:?}", entry_bytes);
+            // 1. Write to catalog.db
+            catalog.insert(&entry_bytes)?;
 
-        // 3. insert to in-mem map
-        self.tables.insert(name.to_string(), schema.clone());
-        Ok(())
+            // 3. insert to in-mem map
+            Ok(fid)
+        } else {
+            let fid = self.storage_manager.write().open_or_create_file(&path)?;
+            self.open_files.insert(name.to_string(), fid);
+
+            self.tables.insert(name.to_string(), schema.clone());
+            Ok(fid)
+        }
     }
     #[must_use]
     pub fn get_num_tables(&self) -> usize {
         self.tables.len()
+    }
+
+    fn create_table_file_name(&self, table_name: &str) -> PathBuf {
+        self.storage_manager
+            .read()
+            .base_path
+            .join(format!("{table_name}.db"))
+    }
+
+    pub fn get_file_id(&self, table_name: &str) -> anyhow::Result<u32> {
+        match self.open_files.get(table_name) {
+            None => self
+                .storage_manager
+                .write()
+                .open_or_create_file(self.create_table_file_name(table_name).as_path()),
+            Some(fid) => Ok(*fid),
+        }
     }
 }

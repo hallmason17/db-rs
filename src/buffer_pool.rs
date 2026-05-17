@@ -9,13 +9,15 @@ use std::{
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    DbError, DbResult, FrameHandle, PAGE_SIZE, PageGuard, PageId, storage::StorageManager,
+    DbError, FrameHandle, PAGE_SIZE, PageGuard, PageId,
+    page::{PageHeaderMut, PageKind},
+    storage::StorageManager,
 };
 
 impl<'a> FrameHandle<'a> {
     pub fn new(frame: &'a Frame) -> Self {
         Self {
-            page_id: frame.page_id,
+            page_id: *frame.page_id.read(),
             data: Arc::clone(&frame.data),
             frame,
         }
@@ -29,6 +31,7 @@ impl Drop for FrameHandle<'_> {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum ReplacementStrategy {
     Fifo,
     Clock,
@@ -39,7 +42,7 @@ pub enum ReplacementStrategy {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Frame {
-    pub page_id: PageId,
+    pub page_id: RwLock<PageId>,
     pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
     pin_count: AtomicI32,
     clock_flag: AtomicBool,
@@ -57,10 +60,10 @@ impl Default for Frame {
     fn default() -> Self {
         let buf = [0u8; PAGE_SIZE];
         Self {
-            page_id: PageId {
+            page_id: RwLock::new(PageId {
                 file_id: 0,
                 page_num: 0,
-            },
+            }),
             data: Arc::new(RwLock::new(buf)),
             pin_count: AtomicI32::new(0),
             clock_flag: AtomicBool::new(false),
@@ -71,6 +74,7 @@ impl Default for Frame {
 
 type FrameNum = u64;
 
+#[derive(Debug)]
 pub struct BufferPool {
     replacement_strategy: ReplacementStrategy,
     frames: Vec<Frame>,
@@ -112,7 +116,7 @@ impl BufferPool {
         let mut storage = self.storage_mgr.write();
         for frame in &self.frames {
             if frame.dirty.load(Ordering::Acquire) {
-                storage.write_block(&frame.page_id, &frame.data.read())?;
+                storage.write_block(&frame.page_id.read(), &frame.data.read())?;
                 frame.dirty.store(false, Ordering::Release);
             }
         }
@@ -153,6 +157,8 @@ impl BufferPool {
         }
         None
     }
+
+    // TODO: First look to evict dirty pages.
     fn select_victim(&self) -> Option<FrameNum> {
         if self.free_frames.lock().is_empty() {
             match self.replacement_strategy {
@@ -163,7 +169,7 @@ impl BufferPool {
             self.free_frames.lock().pop().map(|x| x as FrameNum)
         }
     }
-    fn evict_page(&self, frame_num: FrameNum) -> DbResult<()> {
+    fn evict_page(&self, frame_num: FrameNum) -> anyhow::Result<()> {
         let page_num = {
             let mut frame_map = self.frame_to_page_map.write();
             let mut page_map = self.page_to_frame_map.write();
@@ -185,7 +191,7 @@ impl BufferPool {
 
         Ok(())
     }
-    pub fn get_page(&self, page_id: PageId) -> DbResult<PageGuard<'_>> {
+    pub fn get_page(&self, page_id: PageId) -> anyhow::Result<PageGuard<'_>> {
         // TODO: refactor, wrote the same thing multiple times.
         //      maybe change to let frame_index = if...
 
@@ -205,6 +211,8 @@ impl BufferPool {
 
             frame.clock_flag.store(true, Ordering::Relaxed);
             frame.pin_count.fetch_add(1, Ordering::Relaxed);
+            frame.page_id.write().page_num = page_id.page_num;
+            frame.page_id.write().file_id = page_id.file_id;
 
             let mut data = frame.data.write();
             self.storage_mgr.read().read_block(
@@ -215,7 +223,46 @@ impl BufferPool {
             let handle = FrameHandle::new(frame);
             Ok(PageGuard { handle })
         } else {
-            Err(DbError::Unknown)
+            Err(DbError::Unknown.into())
+        }
+    }
+
+    pub fn create_page(&self, file_id: u32, kind: PageKind) -> anyhow::Result<PageGuard<'_>> {
+        if let Some(frame_index) = self.select_victim() {
+            let page_num = self.storage_mgr.write().get_next_page_id(file_id)?;
+            tracing::debug!("next page id: {}", page_num);
+            self.evict_page(frame_index as FrameNum)?;
+
+            let frame = &self.frames[usize::try_from(frame_index)?];
+            self.frame_to_page_map
+                .write()
+                .insert(frame_index, PageId { file_id, page_num });
+            self.page_to_frame_map
+                .write()
+                .insert(PageId { file_id, page_num }, frame_index);
+
+            frame.mark_dirty();
+            frame.clock_flag.store(true, Ordering::Relaxed);
+            frame.pin_count.fetch_add(1, Ordering::Relaxed);
+            frame.page_id.write().page_num = page_num;
+            frame.page_id.write().file_id = file_id;
+
+            {
+                let mut data = frame.data.write();
+                if matches!(kind, PageKind::FreeSpaceMap) {
+                    data.fill(u8::MAX);
+                }
+                let mut header = PageHeaderMut::new(&mut data[..]);
+                header.set_kind(kind);
+                header.set_num_entries(0);
+                header.set_page_id(page_num);
+            }
+
+            Ok(PageGuard {
+                handle: FrameHandle::new(frame),
+            })
+        } else {
+            Err(DbError::Unknown.into())
         }
     }
 }
