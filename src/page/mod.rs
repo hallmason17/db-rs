@@ -298,8 +298,8 @@ pub struct SlotArrayEntry {
 impl SlotArrayEntry {
     fn to_be_bytes(self) -> [u8; size_of::<SlotArrayEntry>()] {
         let mut bytes = [0u8; size_of::<SlotArrayEntry>()];
-        bytes.copy_from_slice(&self.offset.to_be_bytes());
-        bytes.copy_from_slice(&self.size.to_be_bytes());
+        bytes[..2].copy_from_slice(&self.offset.to_be_bytes());
+        bytes[2..].copy_from_slice(&self.size.to_be_bytes());
         bytes
     }
 }
