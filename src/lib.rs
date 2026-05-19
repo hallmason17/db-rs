@@ -1,15 +1,14 @@
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::{num::TryFromIntError, sync::Arc};
 
 use thiserror::Error;
-
-use crate::{buffer_pool::Frame, page::PageKind};
 
 pub mod buffer_pool;
 pub mod catalog;
 pub mod page;
 pub mod storage;
 pub mod tables;
+
 pub(crate) mod page_header_offsets {
     pub const ID: usize = 0;
     pub const KIND: usize = 8;
@@ -91,6 +90,10 @@ pub enum DbError {
 
     #[error("Input error: ")]
     InputError(#[from] DbInputError),
+
+    #[error("no pages available")]
+    NoPagesAvailable,
+
     #[error("unknown error")]
     Unknown,
 }
@@ -122,6 +125,42 @@ impl std::error::Error for DbInputError {
 
 type DbResult<T> = Result<T, DbError>;
 
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct Frame {
+    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
+    pub state: Mutex<FrameState>,
+}
+#[derive(Debug)]
+pub struct FrameState {
+    pub page_id: Option<PageId>,
+    pub pin_count: i32,
+    pub clock_flag: bool,
+    pub dirty: bool,
+}
+impl Frame {
+    pub fn mark_dirty(&self) {
+        self.state.lock().dirty = true;
+    }
+    pub fn unpin(&self) {
+        self.state.lock().pin_count -= 1;
+    }
+}
+impl Default for Frame {
+    fn default() -> Self {
+        let buf = [0u8; PAGE_SIZE];
+        Self {
+            data: Arc::new(RwLock::new(buf)),
+            state: Mutex::new(FrameState {
+                page_id: None,
+                pin_count: 0,
+                clock_flag: false,
+                dirty: false,
+            }),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct FrameHandle<'a> {
@@ -132,26 +171,4 @@ pub struct FrameHandle<'a> {
 
 pub struct PageGuard<'a> {
     handle: FrameHandle<'a>,
-}
-
-fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
-    let mut data = [0u8; PAGE_SIZE];
-    let num_entries: u16 = 0;
-    let next_page: usize = 0;
-    data[page_header_offsets::ID..page_header_offsets::ID + 8]
-        .copy_from_slice(&page_id.to_be_bytes());
-    data[page_header_offsets::KIND] = kind as u8;
-    data[page_header_offsets::ENTRIES..page_header_offsets::ENTRIES + 2]
-        .copy_from_slice(&num_entries.to_be_bytes());
-    data[page_header_offsets::NEXT_PAGE..page_header_offsets::NEXT_PAGE + 8]
-        .copy_from_slice(&next_page.to_be_bytes());
-    match kind {
-        PageKind::Catalog => {
-            data[page_header_offsets::header_page::FIRST_FREE_PAGE_ID
-                ..page_header_offsets::header_page::FIRST_FREE_PAGE_ID + 8]
-                .copy_from_slice(&INITIAL_FIRST_FREE_PAGE_NUMBER.to_be_bytes());
-        }
-        _ => {}
-    }
-    data
 }

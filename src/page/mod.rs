@@ -1,16 +1,35 @@
 use std::ops::{Deref, DerefMut};
 
-use catalog::{Catalog, CatalogMut};
-use fsm::{FreeSpaceMap, FreeSpaceMapMut};
-use heap::{Heap, HeapMut};
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::PageGuard;
 use crate::{page_header_offsets, DbError, PAGE_SIZE};
+use crate::{PageGuard, INITIAL_FIRST_FREE_PAGE_NUMBER};
 
 pub mod catalog;
 pub mod fsm;
 pub mod heap;
+
+pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
+    let mut data = [0u8; PAGE_SIZE];
+    let num_entries: u16 = 0;
+    let next_page: usize = 0;
+    data[page_header_offsets::ID..page_header_offsets::ID + 8]
+        .copy_from_slice(&page_id.to_be_bytes());
+    data[page_header_offsets::KIND] = kind as u8;
+    data[page_header_offsets::ENTRIES..page_header_offsets::ENTRIES + 2]
+        .copy_from_slice(&num_entries.to_be_bytes());
+    data[page_header_offsets::NEXT_PAGE..page_header_offsets::NEXT_PAGE + 8]
+        .copy_from_slice(&next_page.to_be_bytes());
+    match kind {
+        PageKind::Catalog => {
+            data[page_header_offsets::header_page::FIRST_FREE_PAGE_ID
+                ..page_header_offsets::header_page::FIRST_FREE_PAGE_ID + 8]
+                .copy_from_slice(&INITIAL_FIRST_FREE_PAGE_NUMBER.to_be_bytes());
+        }
+        _ => {}
+    }
+    data
+}
 
 impl PageGuard<'_> {
     fn cast_read(
@@ -35,39 +54,6 @@ impl PageGuard<'_> {
             return Err(DbError::Unknown.into());
         }
         Ok(page)
-    }
-    pub fn as_heap(&self) -> anyhow::Result<Heap<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_read(PageKind::Heap)?;
-        Ok(Heap { data: page.data })
-    }
-    pub fn as_heap_mut(
-        &mut self,
-    ) -> anyhow::Result<HeapMut<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_write(PageKind::Heap)?;
-        Ok(HeapMut { data: page.data })
-    }
-    pub fn as_catalog(&self) -> anyhow::Result<Catalog<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_read(PageKind::Catalog)?;
-        Ok(Catalog { data: page.data })
-    }
-
-    pub fn as_catalog_mut(
-        &mut self,
-    ) -> anyhow::Result<CatalogMut<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_write(PageKind::Catalog)?;
-        Ok(CatalogMut { data: page.data })
-    }
-
-    pub fn as_fsm(&self) -> anyhow::Result<FreeSpaceMap<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_read(PageKind::FreeSpaceMap)?;
-        Ok(FreeSpaceMap { data: page.data })
-    }
-
-    pub fn as_fsm_mut(
-        &mut self,
-    ) -> anyhow::Result<FreeSpaceMapMut<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
-        let page = self.cast_write(PageKind::FreeSpaceMap)?;
-        Ok(FreeSpaceMapMut { data: page.data })
     }
 }
 
@@ -136,7 +122,11 @@ pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
         let new_freespace_start = freespace_start + u16::try_from(size_of::<SlotArrayEntry>())?;
         let offset = if num_entries > 0 {
             if let Some(sa_entry) = self.get_slot_array_entry(num_entries - 1)? {
-                tracing::debug!("Entry found on page at slot {:?}! {:?}, inserting after that!", num_entries-1, sa_entry);
+                tracing::debug!(
+                    "Entry found on page at slot {:?}! {:?}, inserting after that!",
+                    num_entries - 1,
+                    sa_entry
+                );
                 sa_entry.offset - u16::try_from(size)?
             } else {
                 anyhow::bail!("Failed to get entry that we checked existed! Possible corruption!")

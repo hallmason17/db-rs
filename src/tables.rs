@@ -1,6 +1,13 @@
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
+<<<<<<< HEAD
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+=======
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+>>>>>>> main
 
 use crate::{
     buffer_pool::BufferPool,
@@ -77,7 +84,7 @@ impl Tuple {
 
         // Put the fixed-width values in the header and variable length ones in the variable_bytes
         // vec, track how big they are in the `offset` variable to put (offset, length) pairs in the header.
-        for (val,col) in self.values.iter().zip(schema.attributes.iter()) {
+        for (val, col) in self.values.iter().zip(schema.attributes.iter()) {
             match val {
                 Value::Int(i) => {
                     header_bytes.extend_from_slice(&i.to_be_bytes());
@@ -297,6 +304,7 @@ pub struct Table {
     schema: TableSchema,
     buffer_manager: Arc<BufferPool>,
     catalog_manager: Arc<RwLock<CatalogManager>>,
+    last_known_free_page: AtomicU64,
 }
 impl Table {
     pub fn new(
@@ -343,6 +351,7 @@ impl Table {
             schema: schema.clone(),
             buffer_manager: bp.clone(),
             catalog_manager: catalog.clone(),
+            last_known_free_page: AtomicU64::new(2),
         })
     }
 
@@ -352,7 +361,8 @@ impl Table {
             page_num: self.current_fsm_idx.load(Ordering::Relaxed),
         })?;
         let fsm = fsm.as_fsm()?;
-        let ffp = fsm.find_first_free_page();
+        let ffp = fsm.find_first_free_page(self.last_known_free_page.load(Ordering::Relaxed));
+        self.last_known_free_page.store(ffp, Ordering::Relaxed);
         Ok(ffp)
     }
 
@@ -392,8 +402,11 @@ impl Table {
                         .buffer_manager
                         .create_page(self.file_id, PageKind::FreeSpaceMap)?;
                     let new_fsm = new_fsm_page.as_fsm_mut()?;
-                    self.current_fsm_idx.store(new_fsm.header().page_id(), Ordering::Relaxed);
-                    fsm_page.header_mut().set_next_page(self.current_fsm_idx.load(Ordering::Relaxed));
+                    self.current_fsm_idx
+                        .store(new_fsm.header().page_id(), Ordering::Relaxed);
+                    fsm_page
+                        .header_mut()
+                        .set_next_page(self.current_fsm_idx.load(Ordering::Relaxed));
                 }
 
                 let mut new_heap_frame = self

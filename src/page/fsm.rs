@@ -1,10 +1,13 @@
 use std::ops::{Deref, DerefMut};
 
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+
 use crate::{
-    PAGE_SIZE,
     page::{PageAccessor, PageAccessorMut},
-    page_header_offsets,
+    page_header_offsets, PageGuard, PAGE_SIZE,
 };
+
+use super::PageKind;
 
 pub struct FreeSpaceMap<G> {
     pub data: G,
@@ -58,12 +61,12 @@ pub trait FreeSpaceMapper: PageAccessor {
                 .unwrap(),
         )
     }
-    fn find_first_free_page(&self) -> u64 {
-        for i in 2..self.max_pages() {
+    fn find_first_free_page(&self, last_page_used: u64) -> u64 {
+        for i in last_page_used..self.max_pages() {
             if !self.is_page_full(i) {
                 let num = self.fsm_num();
                 let mp = self.max_pages();
-                let index = i + (num as u64*mp as u64);
+                let index = i + (num as u64 * mp as u64);
                 return index;
             }
         }
@@ -111,6 +114,20 @@ pub trait FreeSpaceMapperMut: FreeSpaceMapper + PageAccessorMut {
         self.data_mut()
             [page_header_offsets::fsm_page::FSM_NUM..page_header_offsets::fsm_page::FSM_NUM + 2]
             .copy_from_slice(&fsm_num.to_be_bytes());
+    }
+}
+
+impl PageGuard<'_> {
+    pub fn as_fsm(&self) -> anyhow::Result<FreeSpaceMap<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
+        let page = self.cast_read(PageKind::FreeSpaceMap)?;
+        Ok(FreeSpaceMap { data: page.data })
+    }
+
+    pub fn as_fsm_mut(
+        &mut self,
+    ) -> anyhow::Result<FreeSpaceMapMut<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
+        let page = self.cast_write(PageKind::FreeSpaceMap)?;
+        Ok(FreeSpaceMapMut { data: page.data })
     }
 }
 #[cfg(test)]
@@ -180,7 +197,7 @@ mod tests {
         fsm.set_page_full(3);
         fsm.set_page_full(4);
 
-        assert_eq!(fsm.find_first_free_page(), 5);
+        assert_eq!(fsm.find_first_free_page(2), 5);
     }
 
     #[test]
@@ -192,7 +209,7 @@ mod tests {
 
         let expected_global_id = 3 + (2 * max_pages_per_chunk);
 
-        assert_eq!(fsm.find_first_free_page(), expected_global_id);
+        assert_eq!(fsm.find_first_free_page(2), expected_global_id);
     }
 
     #[test]

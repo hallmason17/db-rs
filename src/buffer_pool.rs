@@ -1,18 +1,18 @@
 use std::{
     collections::HashMap,
     sync::{
+        atomic::{AtomicUsize, Ordering},
         Arc,
-        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
     },
 };
 
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    DbError, FrameHandle, PAGE_SIZE, PageGuard, PageId,
     page::{PageHeaderMut, PageKind},
     page_header_offsets,
     storage::StorageManager,
+    DbError, Frame, FrameHandle, PageGuard, PageId,
 };
 
 impl<'a> FrameHandle<'a> {
@@ -38,42 +38,6 @@ pub enum ReplacementStrategy {
     Clock,
     Lru(u32),
     Lfu,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct Frame {
-    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-    pub state: Mutex<FrameState>,
-}
-#[derive(Debug)]
-pub struct FrameState {
-    pub page_id: Option<PageId>,
-    pub pin_count: i32,
-    pub clock_flag: bool,
-    pub dirty: bool,
-}
-impl Frame {
-    pub fn mark_dirty(&self) {
-        self.state.lock().dirty = true;
-    }
-    pub fn unpin(&self) {
-        self.state.lock().pin_count += 1;
-    }
-}
-impl Default for Frame {
-    fn default() -> Self {
-        let buf = [0u8; PAGE_SIZE];
-        Self {
-            data: Arc::new(RwLock::new(buf)),
-            state: Mutex::new(FrameState {
-                page_id: None,
-                pin_count: 0,
-                clock_flag: false,
-                dirty: false,
-            }),
-        }
-    }
 }
 
 type FrameNum = u64;
@@ -164,44 +128,42 @@ impl BufferPool {
 
     // TODO: First look to evict dirty pages.
     fn select_victim(&self) -> Option<FrameNum> {
-        if self.free_frames.lock().is_empty() {
+        let mut free = self.free_frames.lock();
+        if let Some(frame) = free.pop() {
+            Some(frame as FrameNum)
+        } else {
             match self.replacement_strategy {
                 ReplacementStrategy::Clock => self.select_victim_clock(),
                 _ => None,
             }
-        } else {
-            self.free_frames.lock().pop().map(|x| x as FrameNum)
         }
     }
     fn evict_page(&self, frame_num: FrameNum) -> anyhow::Result<()> {
         let frame = &self.frames[usize::try_from(frame_num)?];
         let state = frame.state.lock();
         let page_num = state.page_id;
-        if let Some(page) = page_num
-            && state.dirty
-        {
+        if let Some(page) = page_num {
             self.page_table.write().remove(&page);
-
-            let write_buf = frame.data.read().clone();
-            let mut sm = self.storage_mgr.write();
-            sm.write_block(&page, &write_buf)?;
+            if state.dirty {
+                let write_buf = frame.data.read().clone();
+                let mut sm = self.storage_mgr.write();
+                sm.write_block(&page, &write_buf)?;
+            }
         }
 
         Ok(())
     }
-    fn load_page(&self, page_id: PageId) -> anyhow::Result<u64> {
-        Ok(0)
-    }
+
     pub fn get_page(&self, page_id: PageId) -> anyhow::Result<PageGuard<'_>> {
-        let pt = self.page_table.read();
-        if let Some(&frame_num) = pt.get(&page_id) {
-            let frame = &self.frames[usize::try_from(frame_num)?];
+        if let Some(frame_num) = self.find_entry_in_map(page_id) {
+            let frame = &self.frames[usize::try_from(frame_num.frame)?];
             let mut state = frame.state.lock();
             state.pin_count += 1;
             state.clock_flag = true;
             let handle = FrameHandle::new(frame, page_id);
             Ok(PageGuard { handle })
         } else if let Some(frame_index) = self.select_victim() {
+            self.page_table.write().insert(page_id, frame_index);
             let frame = &self.frames[usize::try_from(frame_index)?];
             self.evict_page(frame_index as FrameNum)?;
             let mut state = frame.state.lock();
@@ -222,7 +184,7 @@ impl BufferPool {
             let handle = FrameHandle::new(frame, page_id);
             Ok(PageGuard { handle })
         } else {
-            Err(DbError::Unknown.into())
+            Err(DbError::NoPagesAvailable.into())
         }
     }
 
@@ -261,7 +223,7 @@ impl BufferPool {
             }
 
             Ok(PageGuard {
-                handle: FrameHandle::new(frame, PageId{file_id,page_num}),
+                handle: FrameHandle::new(frame, PageId { file_id, page_num }),
             })
         } else {
             Err(DbError::Unknown.into())

@@ -3,11 +3,11 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use parking_lot::RwLock;
 
 use crate::{
-    CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
     page::{PageAccessor, PageHeaderReader, SlottedPageMut},
     storage::StorageManager,
     tables::TableSchema,
+    CATALOG_PAGE_ID,
 };
 
 #[derive(Debug)]
@@ -160,10 +160,7 @@ impl CatalogManager {
     }
 
     fn create_table_file_name(&self, table_name: &str) -> PathBuf {
-        self.storage_manager
-            .read()
-            .base_path
-            .join(format!("{table_name}.db"))
+        PathBuf::from(format!("{table_name}.db"))
     }
 
     pub fn get_file_id(&self, table_name: &str) -> anyhow::Result<u32> {

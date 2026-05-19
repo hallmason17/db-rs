@@ -8,8 +8,8 @@ use std::{
 use tracing::{debug, error, info};
 
 use crate::{
-    DbError, DbResult, MAGIC_NUMBER, PAGE_SIZE, PageFileFooter, PageId, create_blank_page,
-    page::PageKind,
+    page::create_blank_page, page::PageKind, DbError, DbResult, PageFileFooter, PageId,
+    MAGIC_NUMBER, PAGE_SIZE,
 };
 
 #[derive(Debug)]
@@ -93,7 +93,7 @@ impl StorageManager {
     /// Opens a db file and returns a file_id
     pub fn open_or_create_file(&mut self, path: &Path) -> anyhow::Result<u32> {
         let full_path = self.base_path.join(path);
-        println!("Opening file at: {}", full_path.display());
+        //println!("Opening file at: {}", full_path.display());
         if let Some(id) = self.path_map.get(&full_path) {
             return Ok(*id);
         }
