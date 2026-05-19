@@ -6,7 +6,7 @@ use heap::{Heap, HeapMut};
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::PageGuard;
-use crate::{DbError, PAGE_SIZE, page_header_offsets};
+use crate::{page_header_offsets, DbError, PAGE_SIZE};
 
 pub mod catalog;
 pub mod fsm;
@@ -136,7 +136,7 @@ pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
         let new_freespace_start = freespace_start + u16::try_from(size_of::<SlotArrayEntry>())?;
         let offset = if num_entries > 0 {
             if let Some(sa_entry) = self.get_slot_array_entry(num_entries - 1)? {
-                tracing::debug!("Entry found on page! {:?}, inserting after that!", sa_entry);
+                tracing::debug!("Entry found on page at slot {:?}! {:?}, inserting after that!", num_entries-1, sa_entry);
                 sa_entry.offset - u16::try_from(size)?
             } else {
                 anyhow::bail!("Failed to get entry that we checked existed! Possible corruption!")

@@ -1,18 +1,19 @@
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use crate::{
-    DbError, DbInputError, DbResult, PageId,
     buffer_pool::BufferPool,
     catalog::CatalogManager,
     page::{
-        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
         fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
+        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
     },
+    DbError, DbInputError, DbResult, PageId,
 };
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct RecordId {
     page: u64,
     slot: u16,
@@ -24,31 +25,130 @@ pub struct Record {
     data: Vec<u8>,
 }
 
+pub struct Tuple {
+    pub values: Vec<Value>,
+}
+impl Tuple {
+    pub fn new(values: &[Value]) -> Self {
+        Self {
+            values: values.to_vec(),
+        }
+    }
+
+    fn calc_header_size(&self) -> usize {
+        let mut size = 0;
+        for value in &self.values {
+            match value {
+                // (offset as u16, len as u16)
+                Value::VarChar(_) | Value::Blob(_) => {
+                    size += 4;
+                }
+                // value types
+                _ => {
+                    size += value.size();
+                }
+            }
+        }
+        size
+    }
+
+    fn gen_null_bitmap(&self) -> Vec<u8> {
+        let num_bytes = self.values.len().div_ceil(8);
+        let mut bytes = vec![0u8; num_bytes];
+
+        for (idx, v) in self.values.iter().enumerate() {
+            if matches!(v, Value::Null) {
+                let byte = (idx / 8) as usize;
+                let shamt = (7 - (idx % 8)) as u8;
+                bytes[byte] |= 1u8 << shamt;
+            }
+        }
+        bytes
+    }
+
+    pub fn serialize(&self, schema: &TableSchema) -> Vec<u8> {
+        let mut header_bytes = Vec::new();
+        let mut variable_bytes = Vec::new();
+
+        let mut variable_byte_offset = self.calc_header_size();
+
+        let null_bitmap = self.gen_null_bitmap();
+        header_bytes.extend_from_slice(&null_bitmap);
+
+        // Put the fixed-width values in the header and variable length ones in the variable_bytes
+        // vec, track how big they are in the `offset` variable to put (offset, length) pairs in the header.
+        for (val,col) in self.values.iter().zip(schema.attributes.iter()) {
+            match val {
+                Value::Int(i) => {
+                    header_bytes.extend_from_slice(&i.to_be_bytes());
+                }
+                Value::Float(f) => {
+                    header_bytes.extend_from_slice(&f.to_be_bytes());
+                }
+                Value::Boolean(b) => {
+                    if *b {
+                        header_bytes.push(1 as u8);
+                    } else {
+                        header_bytes.push(0 as u8);
+                    }
+                }
+                Value::VarChar(s) => {
+                    let len = s.len();
+                    header_bytes.extend_from_slice(&(variable_byte_offset as u16).to_be_bytes());
+                    header_bytes.extend_from_slice(&(len as u16).to_be_bytes());
+                    variable_bytes.extend_from_slice(s.as_bytes());
+                    variable_byte_offset += len;
+                }
+                Value::Blob(b) => {
+                    let len = b.len();
+                    header_bytes.extend_from_slice(&(variable_byte_offset as u16).to_be_bytes());
+                    header_bytes.extend_from_slice(&(len as u16).to_be_bytes());
+                    variable_bytes.extend_from_slice(&b);
+                    variable_byte_offset += len;
+                }
+                Value::Null => {
+                    // TODO: Can I do nothing here with a null bitmap? Probably not...
+                    // Do I just fill with the DT size so all headers are the same length? Probably, but consult textbook.
+                    header_bytes.extend_from_slice(&vec![0u8; col.data_type.size()]);
+                }
+            }
+        }
+
+        header_bytes.extend(&variable_bytes);
+        header_bytes
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum DataType {
     Int,
-    String,
+    VarChar,
     Float,
     Boolean,
     Blob,
-    Null,
-    Invalid,
 }
 impl DataType {
     fn from_u8(byte: u8) -> Self {
         match byte {
             0 => Self::Int,
-            1 => Self::String,
+            1 => Self::VarChar,
             2 => Self::Float,
             3 => Self::Boolean,
             4 => Self::Blob,
-            5 => Self::Null,
-            _ => Self::Invalid,
+            _ => unreachable!(),
+        }
+    }
+    fn size(&self) -> usize {
+        match self {
+            Self::Int |Self::Float => 4,
+            Self::Boolean => 1,
+            Self::VarChar | Self::Blob => 4,
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Value {
     Int(i32),
     VarChar(String),
@@ -57,6 +157,18 @@ pub enum Value {
     Blob(Vec<u8>),
     Null,
 }
+impl Value {
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Int(i) => size_of_val(i),
+            Self::Float(f) => size_of_val(f),
+            Self::VarChar(s) => s.len(),
+            Self::Boolean(_) => 1,
+            Self::Blob(b) => b.len(),
+            Self::Null => 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -64,9 +176,15 @@ pub struct ColumnDefinition {
     pub name: String,
     pub data_type: DataType,
     pub is_key: bool,
+    pub is_nullable: bool,
 }
 impl ColumnDefinition {
-    pub fn new(name: String, data_type: DataType, is_key: bool) -> DbResult<Self> {
+    pub fn new(
+        name: String,
+        data_type: DataType,
+        is_key: bool,
+        is_nullable: bool,
+    ) -> DbResult<Self> {
         if name.len() > u8::MAX as usize {
             return Err(DbError::InputError(DbInputError::StringTooLong));
         }
@@ -74,6 +192,7 @@ impl ColumnDefinition {
             name,
             data_type,
             is_key,
+            is_nullable,
         })
     }
     pub fn to_be_bytes(&self) -> Result<Vec<u8>> {
@@ -83,12 +202,13 @@ impl ColumnDefinition {
         bytes.extend_from_slice(self.name.as_bytes());
         bytes.push(self.data_type as u8);
         bytes.push(u8::from(self.is_key));
+        bytes.push(u8::from(self.is_nullable));
         Ok(bytes)
     }
 
     pub fn from_be_bytes(bytes: &[u8]) -> Result<(Self, usize)> {
         let mut data = bytes;
-        let mut len = 3;
+        let mut len = 4;
         let name_len = data[0] as usize;
         data = &data[1..];
         let name = String::from_utf8_lossy(&data[..name_len]);
@@ -104,11 +224,21 @@ impl ColumnDefinition {
                 unreachable!()
             }
         };
+        data = &data[1..];
+        let is_nullable = match data[0] {
+            0 => false,
+            1 => true,
+            _ => {
+                eprintln!("Casting {} to a bool?", data[0]);
+                unreachable!()
+            }
+        };
         Ok((
             Self {
                 name: name.to_string(),
                 data_type,
                 is_key,
+                is_nullable,
             },
             len,
         ))
@@ -163,7 +293,7 @@ const FIRST_FSM_PAGE: u64 = 1;
 pub struct Table {
     name: String,
     file_id: u32,
-    current_fsm_idx: u64,
+    current_fsm_idx: AtomicU64,
     schema: TableSchema,
     buffer_manager: Arc<BufferPool>,
     catalog_manager: Arc<RwLock<CatalogManager>>,
@@ -193,7 +323,8 @@ impl Table {
             // 2.2 Write free space map page.
             {
                 let mut page = bp.create_page(file_id, PageKind::FreeSpaceMap)?;
-                let page = page.as_fsm_mut()?;
+                let mut page = page.as_fsm_mut()?;
+                page.set_fsm_num(0);
                 assert!(page.header().page_id() == 1);
             }
             // 2.3 Make the first heap page for storage
@@ -208,7 +339,7 @@ impl Table {
         Ok(Self {
             name: name.to_string(),
             file_id,
-            current_fsm_idx: FIRST_FSM_PAGE,
+            current_fsm_idx: AtomicU64::new(FIRST_FSM_PAGE),
             schema: schema.clone(),
             buffer_manager: bp.clone(),
             catalog_manager: catalog.clone(),
@@ -218,16 +349,19 @@ impl Table {
     fn find_page_with_free_space(&self) -> anyhow::Result<u64> {
         let fsm = self.buffer_manager.get_page(PageId {
             file_id: self.file_id,
-            page_num: self.current_fsm_idx,
+            page_num: self.current_fsm_idx.load(Ordering::Relaxed),
         })?;
         let fsm = fsm.as_fsm()?;
-        Ok(fsm.find_first_free_page())
+        let ffp = fsm.find_first_free_page();
+        Ok(ffp)
     }
 
     // TODO: record is just a byte slice atm. replace with something more
     // sophisticated (RecordBuilder based on schema?)
-    pub fn insert_record(&mut self, record: &[u8]) -> anyhow::Result<RecordId> {
+    pub fn insert_record(&self, record: &[u8]) -> anyhow::Result<RecordId> {
+        tracing::debug!("Inserting record: {:?}", record);
         let mut free_page = self.find_page_with_free_space()?;
+        tracing::debug!("Inserting to page: {:?}", free_page);
         if free_page == u64::MAX {
             let new_page = self
                 .buffer_manager
@@ -248,7 +382,7 @@ impl Table {
             Err(_) => {
                 let mut fsm = self.buffer_manager.get_page(PageId {
                     file_id: self.file_id,
-                    page_num: self.current_fsm_idx,
+                    page_num: self.current_fsm_idx.load(Ordering::Relaxed),
                 })?;
                 let mut fsm_page = fsm.as_fsm_mut()?;
                 fsm_page.set_page_full(free_page);
@@ -258,8 +392,8 @@ impl Table {
                         .buffer_manager
                         .create_page(self.file_id, PageKind::FreeSpaceMap)?;
                     let new_fsm = new_fsm_page.as_fsm_mut()?;
-                    self.current_fsm_idx = new_fsm.header().page_id();
-                    fsm_page.header_mut().set_next_page(self.current_fsm_idx);
+                    self.current_fsm_idx.store(new_fsm.header().page_id(), Ordering::Relaxed);
+                    fsm_page.header_mut().set_next_page(self.current_fsm_idx.load(Ordering::Relaxed));
                 }
 
                 let mut new_heap_frame = self
