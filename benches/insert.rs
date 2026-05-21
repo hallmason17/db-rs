@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc, thread};
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
@@ -18,7 +18,7 @@ fn setup_table(name: &str) -> Arc<Table> {
 
     let sm = Arc::new(RwLock::new(StorageManager::new(dir.as_path()).unwrap()));
 
-    let bm = Arc::new(BufferPool::new(65536, ReplacementStrategy::Clock, sm.clone()).unwrap());
+    let bm = Arc::new(BufferPool::new(2 ^ 16, ReplacementStrategy::Clock, sm.clone()).unwrap());
 
     let cat = Arc::new(RwLock::new(
         CatalogManager::new(sm.clone(), bm.clone()).unwrap(),
@@ -128,7 +128,7 @@ fn bench_multi_thread_single_table(c: &mut Criterion) {
 fn bench_multi_thread_multi_table(c: &mut Criterion) {
     let mut group = c.benchmark_group("multi_thread_multi_table");
 
-    for threads in [2, 4, 8, 12, 16, 20, 24] {
+    for threads in [2, 4, 8, 12] {
         group.bench_with_input(
             BenchmarkId::from_parameter(threads),
             &threads,
@@ -161,7 +161,7 @@ fn bench_multi_thread_multi_table(c: &mut Criterion) {
 
                             let schema = TableSchema::new(&attributes);
 
-                            for i in 0..10_000 {
+                            for i in 0..(10_000 / threads) {
                                 let record = make_record(i as i32, &schema);
 
                                 std::hint::black_box(table.insert_record(&record).unwrap());
@@ -182,9 +182,9 @@ fn bench_multi_thread_multi_table(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_single_thread_insert,
-    //bench_multi_thread_single_table,
-    bench_multi_thread_multi_table
+    //bench_single_thread_insert,
+    bench_multi_thread_single_table,
+    //bench_multi_thread_multi_table
 );
 
 criterion_main!(benches);

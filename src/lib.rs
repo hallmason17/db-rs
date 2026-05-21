@@ -1,10 +1,10 @@
-use parking_lot::{Mutex, RwLock};
-use std::{num::TryFromIntError, sync::Arc};
+use std::{cell::RefCell, num::TryFromIntError};
 
 use thiserror::Error;
 
 pub mod buffer_pool;
 pub mod catalog;
+pub mod database;
 pub mod page;
 pub mod storage;
 pub mod tables;
@@ -94,6 +94,9 @@ pub enum DbError {
     #[error("no pages available")]
     NoPagesAvailable,
 
+    #[error("incorrect page type")]
+    PageCast,
+
     #[error("unknown error")]
     Unknown,
 }
@@ -128,8 +131,8 @@ type DbResult<T> = Result<T, DbError>;
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Frame {
-    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-    pub state: Mutex<FrameState>,
+    pub data: RefCell<[u8; PAGE_SIZE]>,
+    pub state: FrameState,
 }
 #[derive(Debug)]
 pub struct FrameState {
@@ -139,36 +142,31 @@ pub struct FrameState {
     pub dirty: bool,
 }
 impl Frame {
-    pub fn mark_dirty(&self) {
-        self.state.lock().dirty = true;
+    pub fn mark_dirty(&mut self) {
+        self.state.dirty = true;
     }
-    pub fn unpin(&self) {
-        self.state.lock().pin_count -= 1;
+    pub fn unpin(&mut self) {
+        self.state.pin_count -= 1;
     }
 }
 impl Default for Frame {
     fn default() -> Self {
-        let buf = [0u8; PAGE_SIZE];
+        let buf = RefCell::new([0u8; PAGE_SIZE]);
         Self {
-            data: Arc::new(RwLock::new(buf)),
-            state: Mutex::new(FrameState {
+            data: buf,
+            state: FrameState {
                 page_id: None,
                 pin_count: 0,
                 clock_flag: false,
                 dirty: false,
-            }),
+            },
         }
     }
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct FrameHandle<'a> {
-    pub page_id: PageId,
-    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-    frame: &'a Frame,
-}
-
-pub struct PageGuard<'a> {
-    handle: FrameHandle<'a>,
+pub struct PageGuard<'pg> {
+    page_id: PageId,
+    frame: &'pg Frame,
 }

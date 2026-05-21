@@ -1,22 +1,12 @@
 use anyhow::{Context, Result};
-use parking_lot::RwLock;
-<<<<<<< HEAD
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
-=======
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
->>>>>>> main
 
 use crate::{
-    buffer_pool::BufferPool,
-    catalog::CatalogManager,
-    page::{
-        fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
-        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
-    },
     DbError, DbInputError, DbResult, PageId,
+    buffer_pool::BufferPool,
+    page::{
+        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
+        fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
+    },
 };
 
 #[allow(dead_code)]
@@ -148,7 +138,7 @@ impl DataType {
     }
     fn size(&self) -> usize {
         match self {
-            Self::Int |Self::Float => 4,
+            Self::Int | Self::Float => 4,
             Self::Boolean => 1,
             Self::VarChar | Self::Blob => 4,
         }
@@ -298,36 +288,41 @@ const FIRST_FSM_PAGE: u64 = 1;
 
 #[allow(dead_code)]
 pub struct Table {
+    pub id: u32,
     name: String,
-    file_id: u32,
-    current_fsm_idx: AtomicU64,
     schema: TableSchema,
-    buffer_manager: Arc<BufferPool>,
-    catalog_manager: Arc<RwLock<CatalogManager>>,
-    last_known_free_page: AtomicU64,
+    current_fsm_idx: u64,
+    last_known_free_page: u64,
 }
 impl Table {
     pub fn new(
         name: &str,
         schema: &TableSchema,
-        bp: Arc<BufferPool>,
-        catalog: Arc<RwLock<CatalogManager>>,
+        bp: &mut BufferPool,
+        file_id: u32,
     ) -> anyhow::Result<Self> {
-        let cat = catalog.clone();
-        let bp = bp.clone();
         // 1. Register with catalog, get file_id.
-        let file_id = cat.write().create_table(name, schema)?;
 
         // 2. Initialize the page file.
         // 2.1 Catalog file initialization (write schema).
-        let mut page = bp.get_page(PageId {
-            file_id,
-            page_num: 0,
-        })?;
-        let mut page = page.as_catalog_mut()?;
-        tracing::debug!("{:?}", page.header().num_entries());
-        if page.header().num_entries() == 0 {
-            page.insert(&schema.to_be_bytes()?)?;
+        let num_entries = {
+            let page = bp.get_page(PageId {
+                file_id,
+                page_num: 0,
+            })?;
+            let page = page.as_catalog()?;
+            tracing::debug!("{:?}", page.header().num_entries());
+            page.header().num_entries()
+        };
+        if num_entries == 0 {
+            {
+                let mut page = bp.get_page(PageId {
+                    file_id,
+                    page_num: 0,
+                })?;
+                let mut page = page.as_catalog_mut()?;
+                page.insert(&schema.to_be_bytes()?)?;
+            }
             // 2.2 Write free space map page.
             {
                 let mut page = bp.create_page(file_id, PageKind::FreeSpaceMap)?;
@@ -346,78 +341,116 @@ impl Table {
 
         Ok(Self {
             name: name.to_string(),
-            file_id,
-            current_fsm_idx: AtomicU64::new(FIRST_FSM_PAGE),
+            id: file_id,
+            current_fsm_idx: FIRST_FSM_PAGE,
             schema: schema.clone(),
-            buffer_manager: bp.clone(),
-            catalog_manager: catalog.clone(),
-            last_known_free_page: AtomicU64::new(2),
+            last_known_free_page: 2,
         })
     }
 
-    fn find_page_with_free_space(&self) -> anyhow::Result<u64> {
-        let fsm = self.buffer_manager.get_page(PageId {
-            file_id: self.file_id,
-            page_num: self.current_fsm_idx.load(Ordering::Relaxed),
+    fn find_page_with_free_space(&mut self, bp: &mut BufferPool) -> anyhow::Result<u64> {
+        let fsm_num = self.current_fsm_idx;
+        tracing::info!("Getting FSM {:?}", fsm_num);
+        let fsm = bp.get_page(PageId {
+            file_id: self.id,
+            page_num: fsm_num,
         })?;
         let fsm = fsm.as_fsm()?;
-        let ffp = fsm.find_first_free_page(self.last_known_free_page.load(Ordering::Relaxed));
-        self.last_known_free_page.store(ffp, Ordering::Relaxed);
+        let ffp = fsm.find_first_free_page(self.last_known_free_page);
+        self.last_known_free_page = ffp;
         Ok(ffp)
+    }
+
+    fn set_fsm_page_full(&self, bmgr: &mut BufferPool, page_num: u64) -> anyhow::Result<()> {
+        let mut fsm = bmgr.get_page(PageId {
+            file_id: self.id,
+            page_num: self.current_fsm_idx,
+        })?;
+        let mut fsm_page = fsm.as_fsm_mut()?;
+        fsm_page.set_page_full(page_num);
+        Ok(())
+    }
+
+    fn is_fsm_full(&self, bmgr: &mut BufferPool) -> anyhow::Result<bool> {
+        let fsm = bmgr.get_page(PageId {
+            file_id: self.id,
+            page_num: self.current_fsm_idx,
+        })?;
+        let fsm_page = fsm.as_fsm()?;
+        Ok(fsm_page.is_full())
+    }
+
+    fn handle_full_page(&mut self, page_num: u64, bp: &mut BufferPool) -> anyhow::Result<()> {
+        self.set_fsm_page_full(bp, page_num)?;
+        let is_fsm_full = self.is_fsm_full(bp)?;
+
+        if is_fsm_full {
+            tracing::warn!("FSM full!");
+            let new_fsm_num = {
+                let mut new_fsm_page = bp.create_page(self.id, PageKind::FreeSpaceMap)?;
+                let new_fsm = new_fsm_page.as_fsm_mut()?;
+                new_fsm.header().page_id()
+            };
+
+            let mut old_fsm = bp.get_page(PageId {
+                file_id: self.id,
+                page_num: self.current_fsm_idx,
+            })?;
+            let mut old_fsm_page = old_fsm.as_fsm_mut()?;
+            old_fsm_page.header_mut().set_next_page(new_fsm_num);
+            self.current_fsm_idx = new_fsm_num;
+
+            tracing::warn!("FSM full! Created new one at {:?}", self.current_fsm_idx);
+        }
+        Ok(())
+    }
+
+    fn try_insert_into_page(
+        &mut self,
+        page_num: u64,
+        record: &[u8],
+        bp: &mut BufferPool,
+    ) -> anyhow::Result<Option<RecordId>> {
+        let mut page = bp.get_page(PageId {
+            file_id: self.id,
+            page_num,
+        })?;
+
+        let mut heap = page.as_heap_mut()?;
+
+        match heap.insert(record) {
+            Ok(slot) => Ok(Some(RecordId {
+                page: page_num,
+                slot: slot.slot,
+            })),
+            Err(_) => Ok(None),
+        }
     }
 
     // TODO: record is just a byte slice atm. replace with something more
     // sophisticated (RecordBuilder based on schema?)
-    pub fn insert_record(&self, record: &[u8]) -> anyhow::Result<RecordId> {
+    pub fn insert_record(
+        &mut self,
+        record: &[u8],
+        bp: &mut BufferPool,
+    ) -> anyhow::Result<RecordId> {
         tracing::debug!("Inserting record: {:?}", record);
-        let mut free_page = self.find_page_with_free_space()?;
-        tracing::debug!("Inserting to page: {:?}", free_page);
-        if free_page == u64::MAX {
-            let new_page = self
-                .buffer_manager
-                .create_page(self.file_id, PageKind::Heap)?;
-            free_page = new_page.handle.page_id.page_num;
-        }
+        let mut free_page = {
+            let mut pnum = self.find_page_with_free_space(bp)?;
+            if pnum == u64::MAX {
+                let new_page = bp.create_page(self.id, PageKind::Heap)?;
+                pnum = new_page.page_id.page_num;
+            }
+            pnum
+        };
 
-        let mut page = self.buffer_manager.get_page(PageId {
-            file_id: self.file_id,
-            page_num: free_page,
-        })?;
-        let mut heap_page = page.as_heap_mut()?;
-        match heap_page.insert(record) {
-            Ok(slot_num) => Ok(RecordId {
-                page: free_page,
-                slot: slot_num.slot,
-            }),
-            Err(_) => {
-                let mut fsm = self.buffer_manager.get_page(PageId {
-                    file_id: self.file_id,
-                    page_num: self.current_fsm_idx.load(Ordering::Relaxed),
-                })?;
-                let mut fsm_page = fsm.as_fsm_mut()?;
-                fsm_page.set_page_full(free_page);
-
-                if fsm_page.is_full() {
-                    let mut new_fsm_page = self
-                        .buffer_manager
-                        .create_page(self.file_id, PageKind::FreeSpaceMap)?;
-                    let new_fsm = new_fsm_page.as_fsm_mut()?;
-                    self.current_fsm_idx
-                        .store(new_fsm.header().page_id(), Ordering::Relaxed);
-                    fsm_page
-                        .header_mut()
-                        .set_next_page(self.current_fsm_idx.load(Ordering::Relaxed));
+        loop {
+            match self.try_insert_into_page(free_page, record, bp)? {
+                Some(rid) => return Ok(rid),
+                None => {
+                    self.handle_full_page(free_page, bp)?;
+                    free_page = self.find_page_with_free_space(bp)?;
                 }
-
-                let mut new_heap_frame = self
-                    .buffer_manager
-                    .create_page(self.file_id, PageKind::Heap)?;
-                let mut new_heap_page = new_heap_frame.as_heap_mut()?;
-                let slot = new_heap_page.insert(record)?;
-                Ok(RecordId {
-                    page: new_heap_page.header().page_id(),
-                    slot: slot.slot,
-                })
             }
         }
     }
