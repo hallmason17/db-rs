@@ -4,8 +4,10 @@ use std::{
 };
 
 use crate::{
+    CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
-    catalog::CatalogManager,
+    catalog::{Catalog, CatalogEntry, CatalogManager},
+    page::SlottedPageMut,
     storage::StorageManager,
     tables::{ColumnDefinition, DataType, RecordId, Table, TableSchema},
 };
@@ -35,10 +37,12 @@ fn get_catalog_schema() -> TableSchema {
     }
 }
 
+#[derive(Debug)]
 pub struct Database {
     buffer_manager: BufferPool,
     catalog_manager: CatalogManager,
     tables: HashMap<u32, Table>,
+    open_files: HashMap<String, u32>,
     base_path: PathBuf,
 }
 impl Database {
@@ -50,25 +54,62 @@ impl Database {
     }
     pub fn open(base_path: PathBuf, mut buffer_manager: BufferPool) -> anyhow::Result<Self> {
         let cm = CatalogManager::new(&mut buffer_manager)?;
-        let catalog = Table::new("catalog", &get_catalog_schema(), &mut buffer_manager, 0)?;
+        let catalog = Table::open(0, "catalog", &get_catalog_schema());
         let mut tables = HashMap::new();
         tables.insert(0, catalog);
+        let mut open_files = HashMap::new();
+        open_files.insert(String::from("catalog.db"), 0);
         Ok(Self {
             buffer_manager,
             catalog_manager: cm,
             tables,
+            open_files,
             base_path,
         })
     }
 
+    fn update_catalog(&mut self, catalog_entry: CatalogEntry) -> anyhow::Result<()> {
+        let entry_bytes = catalog_entry.to_be_bytes()?;
+        tracing::debug!("Encoded cat_entry: {:?}", entry_bytes);
+
+        let mut page = self.buffer_manager.get_page(CATALOG_PAGE_ID)?;
+        let mut catalog_page = page.as_catalog_mut()?;
+        let rid = catalog_page.insert(&entry_bytes)?;
+        tracing::debug!("{:?}", rid);
+        Ok(())
+    }
+
     pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> anyhow::Result<u32> {
         let path = self.base_path.join(format!("{name}.db"));
+        if let Some(fid) = self.open_files.get(path.to_str().unwrap()) {
+            return Ok(*fid);
+        }
+        if path.exists() {
+            let fid = self
+                .buffer_manager
+                .storage_manager
+                .open_or_create_file(path.as_path())?;
+            self.open_files.insert(String::from(name), fid);
+            let table = Table::open(fid, name, schema);
+            self.tables.insert(fid, table);
+            return Ok(fid);
+        }
         let fid = self
             .buffer_manager
             .storage_manager
             .open_or_create_file(path.as_path())?;
-        self.catalog_manager
-            .register_table(name, schema, &mut self.buffer_manager, fid)?;
+
+        let catalog_entry = CatalogEntry {
+            table_name: name.to_string(),
+            file_name: path.display().to_string(),
+            schema: schema.to_be_bytes()?,
+        };
+
+        self.update_catalog(catalog_entry)?;
+
+        self.open_files.insert(String::from(name), fid);
+
+        self.catalog_manager.create_table(name, schema)?;
 
         let table = Table::new(name, schema, &mut self.buffer_manager, fid)?;
         self.tables.insert(fid, table);
@@ -77,7 +118,13 @@ impl Database {
 
     pub fn insert_record(&mut self, table_id: u32, record: &[u8]) -> anyhow::Result<RecordId> {
         let table = self.tables.get_mut(&table_id).unwrap();
-        let rid = table.insert_record(record, &mut self.buffer_manager)?;
+        let rid = table.insert(record, &mut self.buffer_manager)?;
         Ok(rid)
+    }
+}
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        let _ = self.buffer_manager.flush_all();
     }
 }

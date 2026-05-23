@@ -55,7 +55,7 @@ impl Tuple {
 
         for (idx, v) in self.values.iter().enumerate() {
             if matches!(v, Value::Null) {
-                let byte = (idx / 8) as usize;
+                let byte = idx / 8;
                 let shamt = (7 - (idx % 8)) as u8;
                 bytes[byte] |= 1u8 << shamt;
             }
@@ -84,9 +84,9 @@ impl Tuple {
                 }
                 Value::Boolean(b) => {
                     if *b {
-                        header_bytes.push(1 as u8);
+                        header_bytes.push(1u8);
                     } else {
-                        header_bytes.push(0 as u8);
+                        header_bytes.push(0u8);
                     }
                 }
                 Value::VarChar(s) => {
@@ -100,7 +100,7 @@ impl Tuple {
                     let len = b.len();
                     header_bytes.extend_from_slice(&(variable_byte_offset as u16).to_be_bytes());
                     header_bytes.extend_from_slice(&(len as u16).to_be_bytes());
-                    variable_bytes.extend_from_slice(&b);
+                    variable_bytes.extend_from_slice(b);
                     variable_byte_offset += len;
                 }
                 Value::Null => {
@@ -286,13 +286,146 @@ impl TableSchema {
 
 const FIRST_FSM_PAGE: u64 = 1;
 
+pub struct HeapStorage<'a> {
+    table: &'a Table,
+    bp: &'a mut BufferPool,
+    current_fsm_idx: u64,
+    last_known_free_page: u64,
+}
+
+impl<'a> HeapStorage<'a> {
+    pub fn new(table: &'a Table, bp: &'a mut BufferPool) -> Self {
+        Self {
+            table,
+            bp,
+            current_fsm_idx: FIRST_FSM_PAGE,
+            last_known_free_page: 2,
+        }
+    }
+
+    fn find_page_with_free_space(&mut self) -> anyhow::Result<u64> {
+        let ffp = {
+            let fsm = self.bp.get_page(PageId {
+                file_id: self.table.id,
+                page_num: self.current_fsm_idx,
+            })?;
+
+            let fsm_page = fsm.as_fsm()?;
+            fsm_page.find_first_free_page(self.last_known_free_page)
+        };
+
+        self.last_known_free_page = ffp;
+        Ok(ffp)
+    }
+
+    fn set_fsm_page_full(&mut self, page_num: u64) -> anyhow::Result<()> {
+        let mut fsm = self.bp.get_page(PageId {
+            file_id: self.table.id,
+            page_num: self.current_fsm_idx,
+        })?;
+        let mut fsm_page = fsm.as_fsm_mut()?;
+        fsm_page.set_page_full(page_num);
+        Ok(())
+    }
+
+    fn is_fsm_full(&mut self) -> anyhow::Result<bool> {
+        let full = {
+            let fsm = self.bp.get_page(PageId {
+                file_id: self.table.id,
+                page_num: self.current_fsm_idx,
+            })?;
+
+            let fsm_page = fsm.as_fsm()?;
+            fsm_page.is_full()
+        };
+
+        Ok(full)
+    }
+
+    fn handle_full_page(&mut self, page_num: u64) -> anyhow::Result<()> {
+        tracing::warn!("Setting page {page_num} full");
+        self.set_fsm_page_full(page_num)?;
+        let is_fsm_full = self.is_fsm_full()?;
+
+        if is_fsm_full {
+            tracing::warn!("FSM full!");
+            let new_fsm_num = {
+                let mut new_fsm_page =
+                    self.bp.create_page(self.table.id, PageKind::FreeSpaceMap)?;
+                let new_fsm = new_fsm_page.as_fsm_mut()?;
+                new_fsm.header().page_id()
+            };
+
+            let mut old_fsm = self.bp.get_page(PageId {
+                file_id: self.table.id,
+                page_num: self.current_fsm_idx,
+            })?;
+            let mut old_fsm_page = old_fsm.as_fsm_mut()?;
+            old_fsm_page.header_mut().set_next_page(new_fsm_num);
+            self.current_fsm_idx = new_fsm_num;
+
+            tracing::warn!("FSM full! Created new one at {:?}", self.current_fsm_idx);
+        }
+        Ok(())
+    }
+
+    fn try_insert_into_page(
+        &mut self,
+        page_num: u64,
+        record: &[u8],
+    ) -> anyhow::Result<Option<RecordId>> {
+        let mut page = if let Ok(page) = self.bp.get_page(PageId {
+            file_id: self.table.id,
+            page_num,
+        }) {
+            page
+        } else {
+            self.bp.create_page(self.table.id, PageKind::Heap)?
+        };
+
+        let rid = page.with_heap_mut(|heap| match heap.insert(record) {
+            Ok(slot) => Ok(Some(RecordId {
+                page: page_num,
+                slot: slot.slot,
+            })),
+            Err(_) => Ok(None),
+        })?;
+
+        Ok(rid)
+    }
+
+    // TODO: record is just a byte slice atm. replace with something more
+    // sophisticated (RecordBuilder based on schema?)
+    pub fn insert_record(&mut self, record: &[u8]) -> anyhow::Result<RecordId> {
+        tracing::debug!("Inserting record: {:?}", record);
+        let mut free_page = {
+            let mut pnum = self.find_page_with_free_space()?;
+            if pnum == u64::MAX {
+                let new_page = self.bp.create_page(self.table.id, PageKind::Heap)?;
+                pnum = new_page.page_id.page_num;
+                tracing::warn!("Created page {pnum}");
+            }
+            pnum
+        };
+
+        loop {
+            match self.try_insert_into_page(free_page, record)? {
+                Some(rid) => return Ok(rid),
+                None => {
+                    self.handle_full_page(free_page)?;
+                    free_page = self.find_page_with_free_space()?;
+                }
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct Table {
     pub id: u32,
     name: String,
     schema: TableSchema,
-    current_fsm_idx: u64,
-    last_known_free_page: u64,
 }
 impl Table {
     pub fn new(
@@ -342,116 +475,20 @@ impl Table {
         Ok(Self {
             name: name.to_string(),
             id: file_id,
-            current_fsm_idx: FIRST_FSM_PAGE,
             schema: schema.clone(),
-            last_known_free_page: 2,
         })
     }
 
-    fn find_page_with_free_space(&mut self, bp: &mut BufferPool) -> anyhow::Result<u64> {
-        let fsm_num = self.current_fsm_idx;
-        tracing::info!("Getting FSM {:?}", fsm_num);
-        let fsm = bp.get_page(PageId {
-            file_id: self.id,
-            page_num: fsm_num,
-        })?;
-        let fsm = fsm.as_fsm()?;
-        let ffp = fsm.find_first_free_page(self.last_known_free_page);
-        self.last_known_free_page = ffp;
-        Ok(ffp)
-    }
-
-    fn set_fsm_page_full(&self, bmgr: &mut BufferPool, page_num: u64) -> anyhow::Result<()> {
-        let mut fsm = bmgr.get_page(PageId {
-            file_id: self.id,
-            page_num: self.current_fsm_idx,
-        })?;
-        let mut fsm_page = fsm.as_fsm_mut()?;
-        fsm_page.set_page_full(page_num);
-        Ok(())
-    }
-
-    fn is_fsm_full(&self, bmgr: &mut BufferPool) -> anyhow::Result<bool> {
-        let fsm = bmgr.get_page(PageId {
-            file_id: self.id,
-            page_num: self.current_fsm_idx,
-        })?;
-        let fsm_page = fsm.as_fsm()?;
-        Ok(fsm_page.is_full())
-    }
-
-    fn handle_full_page(&mut self, page_num: u64, bp: &mut BufferPool) -> anyhow::Result<()> {
-        self.set_fsm_page_full(bp, page_num)?;
-        let is_fsm_full = self.is_fsm_full(bp)?;
-
-        if is_fsm_full {
-            tracing::warn!("FSM full!");
-            let new_fsm_num = {
-                let mut new_fsm_page = bp.create_page(self.id, PageKind::FreeSpaceMap)?;
-                let new_fsm = new_fsm_page.as_fsm_mut()?;
-                new_fsm.header().page_id()
-            };
-
-            let mut old_fsm = bp.get_page(PageId {
-                file_id: self.id,
-                page_num: self.current_fsm_idx,
-            })?;
-            let mut old_fsm_page = old_fsm.as_fsm_mut()?;
-            old_fsm_page.header_mut().set_next_page(new_fsm_num);
-            self.current_fsm_idx = new_fsm_num;
-
-            tracing::warn!("FSM full! Created new one at {:?}", self.current_fsm_idx);
-        }
-        Ok(())
-    }
-
-    fn try_insert_into_page(
-        &mut self,
-        page_num: u64,
-        record: &[u8],
-        bp: &mut BufferPool,
-    ) -> anyhow::Result<Option<RecordId>> {
-        let mut page = bp.get_page(PageId {
-            file_id: self.id,
-            page_num,
-        })?;
-
-        let mut heap = page.as_heap_mut()?;
-
-        match heap.insert(record) {
-            Ok(slot) => Ok(Some(RecordId {
-                page: page_num,
-                slot: slot.slot,
-            })),
-            Err(_) => Ok(None),
+    pub fn open(id: u32, name: &str, schema: &TableSchema) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            schema: schema.clone(),
         }
     }
 
-    // TODO: record is just a byte slice atm. replace with something more
-    // sophisticated (RecordBuilder based on schema?)
-    pub fn insert_record(
-        &mut self,
-        record: &[u8],
-        bp: &mut BufferPool,
-    ) -> anyhow::Result<RecordId> {
-        tracing::debug!("Inserting record: {:?}", record);
-        let mut free_page = {
-            let mut pnum = self.find_page_with_free_space(bp)?;
-            if pnum == u64::MAX {
-                let new_page = bp.create_page(self.id, PageKind::Heap)?;
-                pnum = new_page.page_id.page_num;
-            }
-            pnum
-        };
-
-        loop {
-            match self.try_insert_into_page(free_page, record, bp)? {
-                Some(rid) => return Ok(rid),
-                None => {
-                    self.handle_full_page(free_page, bp)?;
-                    free_page = self.find_page_with_free_space(bp)?;
-                }
-            }
-        }
+    pub fn insert(&self, record: &[u8], bp: &mut BufferPool) -> anyhow::Result<RecordId> {
+        let mut storage = HeapStorage::new(self, bp);
+        storage.insert_record(record)
     }
 }

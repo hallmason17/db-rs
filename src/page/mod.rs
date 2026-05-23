@@ -28,13 +28,13 @@ pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
 }
 
 impl PageGuard<'_> {
-    fn cast_read(&self, expected: PageKind) -> anyhow::Result<Page<Ref<[u8; PAGE_SIZE]>>> {
+    fn cast_read(&self, expected: PageKind) -> anyhow::Result<Page<Ref<'_, [u8; PAGE_SIZE]>>> {
         let data = self.frame.data.borrow();
         let page = Page { data };
         if page.header().kind() != expected {
             tracing::error!(
                 "Tried to cast page {:?} to {:?}, it's a {:?}",
-                page.header().page_id(),
+                self.page_id,
                 page.header().kind(),
                 expected
             );
@@ -43,7 +43,11 @@ impl PageGuard<'_> {
         }
         Ok(page)
     }
-    fn cast_write(&mut self, expected: PageKind) -> anyhow::Result<Page<RefMut<[u8; PAGE_SIZE]>>> {
+    fn cast_write(
+        &mut self,
+        expected: PageKind,
+    ) -> anyhow::Result<Page<RefMut<'_, [u8; PAGE_SIZE]>>> {
+        self.frame.mark_dirty();
         let data = self.frame.data.borrow_mut();
         let page = Page { data };
         if page.header().kind() != expected {

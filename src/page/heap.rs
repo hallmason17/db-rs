@@ -47,7 +47,14 @@ impl<G> SlottedPage for HeapMut<G> where G: Deref<Target = [u8; PAGE_SIZE]> {}
 impl<G> SlottedPageMut for HeapMut<G> where G: DerefMut<Target = [u8; PAGE_SIZE]> {}
 
 impl PageGuard<'_> {
-    pub fn as_heap(&self) -> anyhow::Result<Heap<Ref<[u8; PAGE_SIZE]>>> {
+    pub fn with_heap_mut<T>(
+        &mut self,
+        f: impl FnOnce(&mut HeapMut<RefMut<'_, [u8;PAGE_SIZE]>>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let page = self.cast_write(PageKind::Heap)?;
+        f(&mut HeapMut{data: page.data})
+    }
+    pub fn as_heap(&self) -> anyhow::Result<Heap<Ref<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_read(PageKind::Heap)?;
         Ok(Heap { data: page.data })
     }

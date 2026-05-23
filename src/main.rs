@@ -9,7 +9,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
     let sm = StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap();
-    let bp = BufferPool::new(128, ReplacementStrategy::Clock, sm)?;
+    let bp = BufferPool::new(2 << 10, ReplacementStrategy::Clock, sm)?;
     let mut db = Database::open(std::env::current_dir().unwrap().as_path().into(), bp)?;
 
     let attributes = vec![
@@ -29,7 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let record = tuple.serialize(&schema);
 
-    db.insert_record(table, &record)?;
+    for _ in 0..100000 {
+        db.insert_record(table, &record)?;
+    }
 
     Ok(())
 }

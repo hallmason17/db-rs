@@ -19,7 +19,7 @@ pub struct FileInfo {
 }
 
 #[derive(Debug)]
-struct StorageState {
+pub struct StorageState {
     files: HashMap<u32, FileInfo>,
     paths: HashMap<PathBuf, u32>,
     pub next_id: u32,
@@ -86,7 +86,7 @@ impl StorageManager {
     }
 
     pub fn file_exists(&self, path: &Path) -> anyhow::Result<bool> {
-        let exists = if self.state.paths.get(path).is_some() {
+        let exists = if self.state.paths.contains_key(path) {
             true
         } else {
             path.exists()
@@ -104,7 +104,7 @@ impl StorageManager {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(path)?;
 
         self.state
             .paths
@@ -149,6 +149,7 @@ impl StorageManager {
     }
 
     pub fn read_block(&self, page_id: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
+        tracing::warn!("READ page={} file={}", page_id.page_num, page_id.file_id);
         if let Some(fileinfo) = self.state.files.get(&page_id.file_id) {
             if page_id.page_num >= fileinfo.metadata.num_pages {
                 return Err(DbError::PageNotFound);
@@ -167,6 +168,7 @@ impl StorageManager {
         page_id: &PageId,
         page_handle: &[u8; PAGE_SIZE],
     ) -> anyhow::Result<()> {
+        tracing::warn!("WRITE page={} file={}", page_id.page_num, page_id.file_id);
         // Make sure file exists.
         if !self.state.files.contains_key(&page_id.file_id) {
             return Err(DbError::FileNotFound.into());
@@ -183,6 +185,7 @@ impl StorageManager {
                 .write_at(page_handle.as_slice(), offset as u64)?;
             return Ok(());
         }
+        tracing::error!("couldnt write block");
         Err(DbError::Unknown.into())
     }
 

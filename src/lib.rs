@@ -131,8 +131,8 @@ type DbResult<T> = Result<T, DbError>;
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Frame {
-    pub data: RefCell<[u8; PAGE_SIZE]>,
-    pub state: FrameState,
+    data: RefCell<[u8; PAGE_SIZE]>,
+    pub state: RefCell<FrameState>,
 }
 #[derive(Debug)]
 pub struct FrameState {
@@ -142,11 +142,19 @@ pub struct FrameState {
     pub dirty: bool,
 }
 impl Frame {
-    pub fn mark_dirty(&mut self) {
-        self.state.dirty = true;
+    pub fn mark_dirty(&self) {
+        self.state.borrow_mut().dirty = true;
     }
-    pub fn unpin(&mut self) {
-        self.state.pin_count -= 1;
+    pub fn unpin(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pin_count -= 1;
+        tracing::warn!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
+    }
+    pub fn pin(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pin_count += 1;
+        state.clock_flag = true;
+        tracing::warn!("pin page: {:?} -> {}", state.page_id, state.pin_count);
     }
 }
 impl Default for Frame {
@@ -154,12 +162,12 @@ impl Default for Frame {
         let buf = RefCell::new([0u8; PAGE_SIZE]);
         Self {
             data: buf,
-            state: FrameState {
+            state: RefCell::new(FrameState {
                 page_id: None,
                 pin_count: 0,
                 clock_flag: false,
                 dirty: false,
-            },
+            }),
         }
     }
 }
@@ -169,4 +177,9 @@ impl Default for Frame {
 pub struct PageGuard<'pg> {
     page_id: PageId,
     frame: &'pg Frame,
+}
+impl Drop for PageGuard<'_> {
+    fn drop(&mut self) {
+        self.frame.unpin();
+    }
 }
