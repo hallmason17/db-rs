@@ -64,13 +64,16 @@ pub trait FreeSpaceMapper: PageAccessor {
         )
     }
     fn find_first_free_page(&self, last_page_used: u64) -> u64 {
-        for i in last_page_used..self.max_pages() {
-            tracing::info!("checking if page {} is full.", i);
+        let max = self.max_pages();
+        let start = last_page_used % max;
+        for offset in 0..max {
+            let i = (start + offset) % max;
+            if i < 2 && self.fsm_num() == 0 {
+                continue;
+            }
             if !self.is_page_full(i) {
                 let num = self.fsm_num();
-                let mp = self.max_pages();
-                let index = i + (num as u64 * mp);
-                return index;
+                return i + (num as u64 * max);
             }
         }
         u64::MAX
