@@ -9,7 +9,8 @@ use crate::{
     catalog::{Catalog, CatalogEntry, CatalogManager},
     page::SlottedPageMut,
     storage::StorageManager,
-    tables::{ColumnDefinition, DataType, RecordId, Table, TableSchema},
+    tables::{ColumnDefinition, RecordId, Table, TableSchema},
+    value::DataType,
 };
 
 fn get_catalog_schema() -> TableSchema {

@@ -7,6 +7,7 @@ use crate::{
         PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
         fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
     },
+    value::{DataType, Value},
 };
 
 #[allow(dead_code)]
@@ -113,57 +114,6 @@ impl Tuple {
 
         header_bytes.extend(&variable_bytes);
         header_bytes
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-#[repr(u8)]
-pub enum DataType {
-    Int,
-    VarChar,
-    Float,
-    Boolean,
-    Blob,
-}
-impl DataType {
-    fn from_u8(byte: u8) -> Self {
-        match byte {
-            0 => Self::Int,
-            1 => Self::VarChar,
-            2 => Self::Float,
-            3 => Self::Boolean,
-            4 => Self::Blob,
-            _ => unreachable!(),
-        }
-    }
-    fn size(&self) -> usize {
-        match self {
-            Self::Int | Self::Float => 4,
-            Self::Boolean => 1,
-            Self::VarChar | Self::Blob => 4,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Value {
-    Int(i32),
-    VarChar(String),
-    Float(f32),
-    Boolean(bool),
-    Blob(Vec<u8>),
-    Null,
-}
-impl Value {
-    pub fn size(&self) -> usize {
-        match self {
-            Self::Int(i) => size_of_val(i),
-            Self::Float(f) => size_of_val(f),
-            Self::VarChar(s) => s.len(),
-            Self::Boolean(_) => 1,
-            Self::Blob(b) => b.len(),
-            Self::Null => 0,
-        }
     }
 }
 

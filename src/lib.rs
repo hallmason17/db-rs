@@ -5,9 +5,11 @@ use thiserror::Error;
 pub mod buffer_pool;
 pub mod catalog;
 pub mod database;
+pub mod expr;
 pub mod page;
 pub mod storage;
 pub mod tables;
+pub mod value;
 
 pub(crate) mod page_header_offsets {
     pub const ID: usize = 0;
