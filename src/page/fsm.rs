@@ -1,8 +1,15 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    cell::{Ref, RefMut},
+    ops::{Deref, DerefMut},
+};
 
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
+<<<<<<< HEAD
+    PAGE_SIZE, PageGuard,
+=======
+>>>>>>> main
     page::{PageAccessor, PageAccessorMut},
     page_header_offsets, PageGuard, PAGE_SIZE,
 };
@@ -63,10 +70,19 @@ pub trait FreeSpaceMapper: PageAccessor {
     }
     fn find_first_free_page(&self, last_page_used: u64) -> u64 {
         for i in last_page_used..self.max_pages() {
+<<<<<<< HEAD
+            tracing::info!("checking if page {} is full.", i);
+            if !self.is_page_full(i) {
+                let num = self.fsm_num();
+                let mp = self.max_pages();
+                let index = i + (num as u64 * mp);
+
+=======
             if !self.is_page_full(i) {
                 let num = self.fsm_num();
                 let mp = self.max_pages();
                 let index = i + (num as u64 * mp as u64);
+>>>>>>> main
                 return index;
             }
         }
@@ -118,14 +134,22 @@ pub trait FreeSpaceMapperMut: FreeSpaceMapper + PageAccessorMut {
 }
 
 impl PageGuard<'_> {
+<<<<<<< HEAD
+    pub fn as_fsm(&self) -> anyhow::Result<FreeSpaceMap<Ref<'_, [u8; PAGE_SIZE]>>> {
+=======
     pub fn as_fsm(&self) -> anyhow::Result<FreeSpaceMap<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
+>>>>>>> main
         let page = self.cast_read(PageKind::FreeSpaceMap)?;
         Ok(FreeSpaceMap { data: page.data })
     }
 
+<<<<<<< HEAD
+    pub fn as_fsm_mut(&mut self) -> anyhow::Result<FreeSpaceMapMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
+=======
     pub fn as_fsm_mut(
         &mut self,
     ) -> anyhow::Result<FreeSpaceMapMut<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
+>>>>>>> main
         let page = self.cast_write(PageKind::FreeSpaceMap)?;
         Ok(FreeSpaceMapMut { data: page.data })
     }

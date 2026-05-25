@@ -1,25 +1,16 @@
-use std::{sync::Arc, thread};
-
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
-    catalog::CatalogManager,
+    database::Database,
     storage::StorageManager,
-    tables::{ColumnDefinition, DataType, Table, TableSchema, Tuple, Value},
+    tables::{ColumnDefinition, DataType, TableSchema, Tuple, Value},
 };
-use parking_lot::RwLock;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
-    let sm = Arc::new(RwLock::new(
-        StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap(),
-    ));
-    let bm = Arc::new(BufferPool::new(
-        128,
-        ReplacementStrategy::Clock,
-        sm.clone(),
-    )?);
-    let cat = Arc::new(RwLock::new(CatalogManager::new(sm.clone(), bm.clone())?));
+    let sm = StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap();
+    let bp = BufferPool::new(2 << 10, ReplacementStrategy::Clock, sm)?;
+    let mut db = Database::open(std::env::current_dir().unwrap().as_path().into(), bp)?;
 
     let attributes = vec![
         ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
@@ -28,53 +19,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let schema = TableSchema::new(&attributes);
 
-    let table = Arc::new(Table::new("users", &schema, bm.clone(), cat.clone())?);
-
     let tuple = Tuple::new(&[
         Value::Int(1),
         Value::VarChar("mason".to_string()),
         Value::VarChar("hallmason17".to_string()),
     ]);
 
-    let _tuple1 = Tuple::new(&[
-        Value::Int(1),
-        Value::Null,
-        Value::VarChar("hallmason17".to_string()),
-    ]);
-    let _record = tuple.serialize(&schema);
-    /* */
-    let mut threads = vec![];
-    let num_threads = 1;
-    for _ in 0..num_threads {
-        let value = table.clone();
-        let thread = thread::spawn(move || {
-            let t = value.clone();
-            let attributes = vec![
-                ColumnDefinition::new(String::from("id"), DataType::Int, true, false).unwrap(),
-                ColumnDefinition::new(String::from("name"), DataType::VarChar, false, true)
-                    .unwrap(),
-                ColumnDefinition::new(String::from("email"), DataType::VarChar, true, false)
-                    .unwrap(),
-            ];
-            let schema = TableSchema::new(&attributes);
-            let tuple1 = Tuple::new(&[
-                Value::Int(1),
-                Value::Null,
-                Value::VarChar("hallmason17".to_string()),
-            ]);
+    let table = db.create_table("users", &schema)?;
 
-            for _ in 0..=100000 / num_threads {
-                let rid = t.insert_record(&tuple1.serialize(&schema));
-                println!("{:?}", rid);
-            }
-        });
-        threads.push(thread);
-    }
-    for t in threads {
-        t.join().unwrap();
+    let record = tuple.serialize(&schema);
+
+    for _ in 0..100000 {
+        db.insert_record(table, &record)?;
     }
 
-    bm.flush_all()?;
     Ok(())
 }
 

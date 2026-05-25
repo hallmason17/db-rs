@@ -1,9 +1,15 @@
+use std::cell::{Ref, RefMut};
 use std::ops::{Deref, DerefMut};
 
+<<<<<<< HEAD
+use crate::{DbError, PAGE_SIZE, page_header_offsets};
+use crate::{INITIAL_FIRST_FREE_PAGE_NUMBER, PageGuard};
+=======
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{page_header_offsets, DbError, PAGE_SIZE};
 use crate::{PageGuard, INITIAL_FIRST_FREE_PAGE_NUMBER};
+>>>>>>> main
 
 pub mod catalog;
 pub mod fsm;
@@ -20,6 +26,12 @@ pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
         .copy_from_slice(&num_entries.to_be_bytes());
     data[page_header_offsets::NEXT_PAGE..page_header_offsets::NEXT_PAGE + 8]
         .copy_from_slice(&next_page.to_be_bytes());
+<<<<<<< HEAD
+    if kind == PageKind::Catalog {
+        data[page_header_offsets::header_page::FIRST_FREE_PAGE_ID
+            ..page_header_offsets::header_page::FIRST_FREE_PAGE_ID + 8]
+            .copy_from_slice(&INITIAL_FIRST_FREE_PAGE_NUMBER.to_be_bytes());
+=======
     match kind {
         PageKind::Catalog => {
             data[page_header_offsets::header_page::FIRST_FREE_PAGE_ID
@@ -27,31 +39,42 @@ pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
                 .copy_from_slice(&INITIAL_FIRST_FREE_PAGE_NUMBER.to_be_bytes());
         }
         _ => {}
+>>>>>>> main
     }
     data
 }
 
 impl PageGuard<'_> {
-    fn cast_read(
-        &self,
-        expected: PageKind,
-    ) -> anyhow::Result<Page<RwLockReadGuard<'_, [u8; PAGE_SIZE]>>> {
-        let data = self.handle.data.read();
+    fn cast_read(&self, expected: PageKind) -> anyhow::Result<Page<Ref<'_, [u8; PAGE_SIZE]>>> {
+        let data = self.frame.data.borrow();
         let page = Page { data };
         if page.header().kind() != expected {
-            return Err(DbError::Unknown.into());
+            tracing::error!(
+                "Tried to cast page {:?} to {:?}, it's a {:?}",
+                self.page_id,
+                page.header().kind(),
+                expected
+            );
+            tracing::error!("Data: {:?}", page.data);
+            return Err(DbError::PageCast.into());
         }
         Ok(page)
     }
     fn cast_write(
         &mut self,
         expected: PageKind,
-    ) -> anyhow::Result<Page<RwLockWriteGuard<'_, [u8; PAGE_SIZE]>>> {
-        self.handle.frame.mark_dirty();
-        let data = self.handle.data.write();
+    ) -> anyhow::Result<Page<RefMut<'_, [u8; PAGE_SIZE]>>> {
+        self.frame.mark_dirty();
+        let data = self.frame.data.borrow_mut();
         let page = Page { data };
         if page.header().kind() != expected {
-            return Err(DbError::Unknown.into());
+            tracing::error!(
+                "Tried to cast page {:?} to {:?}, it's a {:?}",
+                page.header().page_id(),
+                page.header().kind(),
+                expected
+            );
+            return Err(DbError::PageCast.into());
         }
         Ok(page)
     }
