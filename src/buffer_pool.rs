@@ -118,7 +118,7 @@ impl BufferPool {
 
     pub fn get_page(&mut self, page_id: PageId) -> anyhow::Result<PageGuard<'_>> {
         if let Some(frame_num) = self.find_entry_in_map(page_id) {
-            tracing::warn!("HIT {:?} PAGE TABLE {:?}", page_id, self.page_table);
+            tracing::trace!("HIT {:?} PAGE TABLE {:?}", page_id, self.page_table);
             let frame = &self.frames[usize::try_from(frame_num)?];
             frame.pin();
             Ok(PageGuard { frame, page_id })
@@ -139,7 +139,7 @@ impl BufferPool {
             }
             assert!(!self.page_table.contains_key(&page_id));
             self.page_table.insert(page_id, frame_index);
-            tracing::warn!("INSERT PAGE {:?} INTO FRAME {}", page_id, frame_index);
+            tracing::trace!("INSERT PAGE {:?} INTO FRAME {}", page_id, frame_index);
             frame.pin();
 
             // If this fails we need to unpin!!!!!!!!! Hours of debugging later...

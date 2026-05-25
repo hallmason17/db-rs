@@ -150,13 +150,13 @@ impl Frame {
     pub fn unpin(&self) {
         let mut state = self.state.borrow_mut();
         state.pin_count -= 1;
-        tracing::warn!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
+        tracing::trace!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
     }
     pub fn pin(&self) {
         let mut state = self.state.borrow_mut();
         state.pin_count += 1;
         state.clock_flag = true;
-        tracing::warn!("pin page: {:?} -> {}", state.page_id, state.pin_count);
+        tracing::trace!("pin page: {:?} -> {}", state.page_id, state.pin_count);
     }
 }
 impl Default for Frame {
