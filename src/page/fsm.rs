@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     PAGE_SIZE, PageGuard,
+    error::DbResult,
     page::{PageAccessor, PageAccessorMut},
     page_header_offsets,
 };
@@ -124,12 +125,12 @@ pub trait FreeSpaceMapperMut: FreeSpaceMapper + PageAccessorMut {
 }
 
 impl PageGuard<'_> {
-    pub fn as_fsm(&self) -> anyhow::Result<FreeSpaceMap<Ref<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_fsm(&self) -> DbResult<FreeSpaceMap<Ref<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_read(PageKind::FreeSpaceMap)?;
         Ok(FreeSpaceMap { data: page.data })
     }
 
-    pub fn as_fsm_mut(&mut self) -> anyhow::Result<FreeSpaceMapMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_fsm_mut(&mut self) -> DbResult<FreeSpaceMapMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_write(PageKind::FreeSpaceMap)?;
         Ok(FreeSpaceMapMut { data: page.data })
     }

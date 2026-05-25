@@ -1,10 +1,9 @@
-use std::{cell::RefCell, num::TryFromIntError};
-
-use thiserror::Error;
+use std::cell::RefCell;
 
 pub mod buffer_pool;
 pub mod catalog;
 pub mod database;
+pub mod error;
 pub mod expr;
 pub mod page;
 pub mod storage;
@@ -64,71 +63,6 @@ pub struct PageId {
     pub file_id: u32,
     pub page_num: u64,
 }
-
-#[derive(Error, Debug)]
-pub enum DbError {
-    #[error("Int conversion error: ")]
-    IntConversion(#[from] TryFromIntError),
-    #[error("Io error:")]
-    Io(#[from] std::io::Error),
-
-    #[error("page not found")]
-    PageNotFound,
-
-    #[error("page full")]
-    PageFull,
-
-    #[error("db file not found")]
-    FileNotFound,
-
-    #[error("no more tuples")]
-    NoMoreTuples,
-
-    #[error("no table named `{0}`")]
-    TableNotFound(String),
-
-    #[error("corrupt page file")]
-    CorruptPageFile,
-
-    #[error("Input error: ")]
-    InputError(#[from] DbInputError),
-
-    #[error("no pages available")]
-    NoPagesAvailable,
-
-    #[error("incorrect page type")]
-    PageCast,
-
-    #[error("unknown error")]
-    Unknown,
-}
-
-#[derive(Debug)]
-pub enum DbInputError {
-    StringTooLong,
-    OutOfBounds,
-}
-impl std::fmt::Display for DbInputError {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
-
-impl std::error::Error for DbInputError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-
-    fn description(&self) -> &str {
-        "description() is deprecated; use Display"
-    }
-
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        self.source()
-    }
-}
-
-type DbResult<T> = Result<T, DbError>;
 
 #[allow(dead_code)]
 #[derive(Debug)]
