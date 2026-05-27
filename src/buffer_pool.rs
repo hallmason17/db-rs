@@ -29,11 +29,6 @@ pub struct BufferPool {
     page_table: HashMap<PageId, FrameNum>,
 }
 
-struct FrameTableEntry {
-    frame: u64,
-    page: PageId,
-}
-
 impl BufferPool {
     pub fn new(
         num_pages: u64,

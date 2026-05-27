@@ -43,7 +43,7 @@ impl PageGuard<'_> {
                 expected
             );
             tracing::error!("Data: {:?}", page.data);
-            return Err(DbError::PageCast.into());
+            return Err(DbError::PageCast);
         }
         Ok(page)
     }
@@ -58,7 +58,7 @@ impl PageGuard<'_> {
                 page.header().kind(),
                 expected
             );
-            return Err(DbError::PageCast.into());
+            return Err(DbError::PageCast);
         }
         Ok(page)
     }
@@ -143,7 +143,7 @@ pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
         };
 
         if offset < new_freespace_start {
-            return Err(DbError::PageFull.into());
+            return Err(DbError::PageFull);
         }
 
         let new_sa_entry = SlotArrayEntry {

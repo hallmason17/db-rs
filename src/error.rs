@@ -40,6 +40,9 @@ pub enum DbError {
     #[error("incorrect page type")]
     PageCast,
 
+    #[error("invalid comparison")]
+    InvalidComparison(String),
+
     #[error("unknown error")]
     Unknown,
 }
