@@ -1,13 +1,14 @@
-use parking_lot::{Mutex, RwLock};
-use std::{num::TryFromIntError, sync::Arc};
-
-use thiserror::Error;
+use std::cell::RefCell;
 
 pub mod buffer_pool;
 pub mod catalog;
+pub mod database;
+pub mod error;
+pub mod expr;
 pub mod page;
 pub mod storage;
 pub mod tables;
+pub mod value;
 
 pub(crate) mod page_header_offsets {
     pub const ID: usize = 0;
@@ -63,73 +64,11 @@ pub struct PageId {
     pub page_num: u64,
 }
 
-#[derive(Error, Debug)]
-pub enum DbError {
-    #[error("Int conversion error: ")]
-    IntConversion(#[from] TryFromIntError),
-    #[error("Io error:")]
-    Io(#[from] std::io::Error),
-
-    #[error("page not found")]
-    PageNotFound,
-
-    #[error("page full")]
-    PageFull,
-
-    #[error("db file not found")]
-    FileNotFound,
-
-    #[error("no more tuples")]
-    NoMoreTuples,
-
-    #[error("no table named `{0}`")]
-    TableNotFound(String),
-
-    #[error("corrupt page file")]
-    CorruptPageFile,
-
-    #[error("Input error: ")]
-    InputError(#[from] DbInputError),
-
-    #[error("no pages available")]
-    NoPagesAvailable,
-
-    #[error("unknown error")]
-    Unknown,
-}
-
-#[derive(Debug)]
-pub enum DbInputError {
-    StringTooLong,
-    OutOfBounds,
-}
-impl std::fmt::Display for DbInputError {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
-
-impl std::error::Error for DbInputError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-
-    fn description(&self) -> &str {
-        "description() is deprecated; use Display"
-    }
-
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        self.source()
-    }
-}
-
-type DbResult<T> = Result<T, DbError>;
-
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Frame {
-    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-    pub state: Mutex<FrameState>,
+    data: RefCell<[u8; PAGE_SIZE]>,
+    pub state: RefCell<FrameState>,
 }
 #[derive(Debug)]
 pub struct FrameState {
@@ -140,18 +79,26 @@ pub struct FrameState {
 }
 impl Frame {
     pub fn mark_dirty(&self) {
-        self.state.lock().dirty = true;
+        self.state.borrow_mut().dirty = true;
     }
     pub fn unpin(&self) {
-        self.state.lock().pin_count -= 1;
+        let mut state = self.state.borrow_mut();
+        state.pin_count -= 1;
+        tracing::trace!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
+    }
+    pub fn pin(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pin_count += 1;
+        state.clock_flag = true;
+        tracing::trace!("pin page: {:?} -> {}", state.page_id, state.pin_count);
     }
 }
 impl Default for Frame {
     fn default() -> Self {
-        let buf = [0u8; PAGE_SIZE];
+        let buf = RefCell::new([0u8; PAGE_SIZE]);
         Self {
-            data: Arc::new(RwLock::new(buf)),
-            state: Mutex::new(FrameState {
+            data: buf,
+            state: RefCell::new(FrameState {
                 page_id: None,
                 pin_count: 0,
                 clock_flag: false,
@@ -163,12 +110,12 @@ impl Default for Frame {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct FrameHandle<'a> {
-    pub page_id: PageId,
-    pub data: Arc<RwLock<[u8; PAGE_SIZE]>>,
-    frame: &'a Frame,
+pub struct PageGuard<'pg> {
+    page_id: PageId,
+    frame: &'pg Frame,
 }
-
-pub struct PageGuard<'a> {
-    handle: FrameHandle<'a>,
+impl Drop for PageGuard<'_> {
+    fn drop(&mut self) {
+        self.frame.unpin();
+    }
 }
