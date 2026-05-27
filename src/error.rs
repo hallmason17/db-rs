@@ -51,12 +51,16 @@ pub enum DbError {
 pub enum DbInputError {
     StringTooLong,
     OutOfBounds,
+    RecordTooLarge,
 }
 impl std::fmt::Display for DbInputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OutOfBounds => write!(f, "value out of bounds"),
             Self::StringTooLong => write!(f, "string exceeds maximum length"),
+            Self::RecordTooLarge => {
+                write!(f, "record exceeds maximum length (page_size - header_size)")
+            }
         }
     }
 }

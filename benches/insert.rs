@@ -4,13 +4,13 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
-    database::Database,
+    database::{Database, TableId},
     storage::StorageManager,
     tables::{ColumnDefinition, TableSchema, Tuple},
     value::{DataType, Value},
 };
 
-fn setup_table(name: &str) -> (Database, u32, TableSchema) {
+fn setup_table(name: &str) -> (Database, TableId, TableSchema) {
     let dir = PathBuf::from(format!("./bench_data_{name}"));
 
     let _ = std::fs::remove_dir_all(&dir);

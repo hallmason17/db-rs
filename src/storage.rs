@@ -76,7 +76,7 @@ impl StorageManager {
                 metadata: footer,
             },
         );
-        path_map.insert(catalog_path, 0);
+        path_map.insert("catalog.db".into(), 0);
 
         Ok(Self {
             state: StorageState {
@@ -108,10 +108,6 @@ impl StorageManager {
             .truncate(false)
             .open(path)?;
 
-        self.state
-            .paths
-            .insert(path.to_path_buf(), self.state.next_id);
-
         let metadata = file.metadata().expect("couldn't get file metadata");
         let footer = if metadata.len() >= std::mem::size_of::<PageFileFooter>() as u64 {
             let footer_size = std::mem::size_of::<PageFileFooter>();
@@ -138,6 +134,9 @@ impl StorageManager {
             return Err(DbError::CorruptPageFile);
         }
 
+        self.state
+            .paths
+            .insert(path.to_path_buf(), self.state.next_id);
         self.state.files.insert(
             self.state.next_id,
             FileInfo {

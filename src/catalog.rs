@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
+    database::TableId,
     error::DbResult,
     page::{PageAccessor, PageHeaderReader, SlottedPageMut},
     tables::TableSchema,
@@ -10,13 +11,16 @@ use crate::{
 
 #[derive(Debug)]
 pub struct CatalogEntry {
+    pub table_id: TableId,
     pub table_name: String,
     pub file_name: String,
-    pub schema: Vec<u8>,
+    pub schema: TableSchema,
 }
 impl CatalogEntry {
     pub fn to_be_bytes(self) -> DbResult<Vec<u8>> {
         let mut bytes = vec![];
+
+        bytes.extend_from_slice(&self.table_id.0.to_be_bytes());
 
         let mut len = u8::try_from(self.table_name.len())?;
         bytes.extend_from_slice(&len.to_be_bytes());
@@ -26,29 +30,36 @@ impl CatalogEntry {
         bytes.extend_from_slice(&len.to_be_bytes());
         bytes.extend_from_slice(self.file_name.as_bytes());
 
-        let blob_len = u16::try_from(self.schema.len())?;
+        let blob = self.schema.to_be_bytes()?;
+        let blob_len = u16::try_from(blob.len())?;
         bytes.extend_from_slice(&blob_len.to_be_bytes());
-        bytes.extend_from_slice(&self.schema);
+        bytes.extend_from_slice(&blob);
 
         Ok(bytes)
     }
 
-    pub fn from_be_bytes(bytes: &[u8]) -> CatalogEntry {
+    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<CatalogEntry> {
         let data = bytes;
+        let table_id = TableId(u32::from_be_bytes(data[0..4].try_into().unwrap()));
+        let data = &data[4..];
         let mut len = data[0] as usize;
-        let table_name = String::from_utf8_lossy(&data[1..=len]).to_string();
-        tracing::debug!("Table name: {}, len: {}", table_name, len);
-        let data = &data[len + 1..];
+        let data = &data[1..];
+        let table_name = String::from_utf8_lossy(&data[0..len]).to_string();
+        let data = &data[len..];
         len = data[0] as usize;
         let file_name = String::from_utf8_lossy(&data[1..=len]).to_string();
         let data = &data[len + 1..];
         let len = u16::from_be_bytes([data[0], data[1]]) as usize;
         let data = &data[2..];
-        Self {
+        let schema = TableSchema::from_be_bytes(&data[0..len])?;
+        let s = Self {
+            table_id,
             table_name,
             file_name,
-            schema: data[0..len].to_vec(),
-        }
+            schema,
+        };
+        tracing::debug!("{:?}", s);
+        Ok(s)
     }
 }
 
@@ -61,10 +72,10 @@ pub trait Catalog {
 
 #[derive(Debug)]
 pub struct CatalogManager {
-    tables: HashMap<String, TableSchema>,
+    tables: HashMap<String, CatalogEntry>,
 }
 impl CatalogManager {
-    pub fn new(buffer_manager: &mut BufferPool) -> DbResult<Self> {
+    pub fn load(buffer_manager: &mut BufferPool) -> DbResult<Self> {
         let mut tables = HashMap::new();
         let mut page = buffer_manager.get_page(CATALOG_PAGE_ID)?;
         let mut catalog = page.as_catalog_mut()?;
@@ -72,15 +83,13 @@ impl CatalogManager {
         for idx in 0..catalog.header().num_entries() {
             let entry = catalog.get_slot_mut(idx)?;
             if let Some(bytes) = entry {
-                let cat_entry = CatalogEntry::from_be_bytes(bytes);
-                tracing::debug!("{:?}", cat_entry);
-                let schema = TableSchema::from_be_bytes(&cat_entry.schema)?;
+                let cat_entry = CatalogEntry::from_be_bytes(bytes)?;
                 tracing::debug!(
                     "Deserialized Table: {}, Schema: {:?}",
                     cat_entry.table_name,
-                    schema
+                    cat_entry.schema
                 );
-                tables.insert(cat_entry.table_name.clone(), schema);
+                tables.insert(cat_entry.table_name.clone(), cat_entry);
             }
         }
 
@@ -93,18 +102,25 @@ impl CatalogManager {
     pub fn get_num_tables(&self) -> usize {
         self.tables.len()
     }
+
+    pub fn entries(&self) -> Vec<&CatalogEntry> {
+        self.tables.values().collect::<Vec<&CatalogEntry>>()
+    }
 }
 
 impl Catalog for CatalogManager {
     fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<()> {
-        self.tables.insert(name.to_string(), schema.clone());
+        //self.tables.insert(name.to_string(), schema.clone());
 
         // 3. insert to in-mem map
         Ok(())
     }
 
     fn get_schema(&self, name: &str) -> Option<&TableSchema> {
-        self.tables.get(name)
+        match self.tables.get(name) {
+            Some(entry) => Some(&entry.schema),
+            None => None,
+        }
     }
 
     fn list_tables(&self) -> Vec<String> {
