@@ -87,11 +87,7 @@ impl StorageManager {
         })
     }
 
-<<<<<<< HEAD
-    pub fn file_exists(&self, path: &Path) -> anyhow::Result<bool> {
-=======
     pub fn file_exists(&self, path: &Path) -> DbResult<bool> {
->>>>>>> github/main
         let exists = if self.state.paths.contains_key(path) {
             true
         } else {
