@@ -471,3 +471,101 @@ impl Table {
         storage.insert_record(record)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_definition_roundtrip() {
+        let col = ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap();
+        let bytes = col.to_be_bytes().unwrap();
+        let (decoded, _) = ColumnDefinition::from_be_bytes(&bytes).unwrap();
+        assert_eq!(col.name, decoded.name);
+        assert_eq!(col.data_type as u8, decoded.data_type as u8);
+        assert_eq!(col.is_key, decoded.is_key);
+        assert_eq!(col.is_nullable, decoded.is_nullable);
+    }
+
+    #[test]
+    fn table_schema_roundtrip() {
+        let attrs = vec![
+            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+        ];
+        let schema = TableSchema::new(&attrs);
+        let bytes = schema.to_be_bytes().unwrap();
+        let decoded = TableSchema::from_be_bytes(&bytes).unwrap();
+        assert_eq!(decoded.attributes.len(), 4);
+        for (a, b) in schema.attributes.iter().zip(decoded.attributes.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.data_type as u8, b.data_type as u8);
+        }
+    }
+
+    #[test]
+    fn tuple_serialize_int() {
+        let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
+        let schema = TableSchema::new(&[col]);
+        let tuple = Tuple::new(&[Value::Int(42)]);
+        let bytes = tuple.serialize(&schema);
+        // null bitmap (1 byte) + int (4 bytes) = 5 bytes
+        assert_eq!(bytes.len(), 5);
+        assert_eq!(bytes[0], 0); // no nulls
+        assert_eq!(&bytes[1..5], &42i32.to_be_bytes());
+    }
+
+    #[test]
+    fn tuple_serialize_varchar() {
+        let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
+        let schema = TableSchema::new(&[col]);
+        let tuple = Tuple::new(&[Value::VarChar("hello".into())]);
+        let bytes = tuple.serialize(&schema);
+        // null bitmap (1) + offset (2) + len (2) + data (5) = 10 bytes
+        assert_eq!(bytes.len(), 10);
+        assert_eq!(&bytes[5..10], b"hello");
+    }
+
+    #[test]
+    fn tuple_serialize_null_bitmap() {
+        let cols = vec![
+            ColumnDefinition::new("a".into(), DataType::Int, false, true).unwrap(),
+            ColumnDefinition::new("b".into(), DataType::Int, false, true).unwrap(),
+            ColumnDefinition::new("c".into(), DataType::Int, false, true).unwrap(),
+        ];
+        let schema = TableSchema::new(&cols);
+        // Second value is null
+        let tuple = Tuple::new(&[Value::Int(10), Value::Null, Value::Int(30)]);
+        let bytes = tuple.serialize(&schema);
+        // null bitmap (1 byte): bit 1 (0-indexed from MSB) should be set
+        assert_eq!(bytes[0], 0b0100_0000);
+        assert_eq!(&bytes[1..5], &10i32.to_be_bytes());
+        assert_eq!(&bytes[9..13], &30i32.to_be_bytes());
+    }
+
+    #[test]
+    fn tuple_serialize_mixed_types() {
+        let cols = vec![
+            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("gpa".into(), DataType::Float, false, false).unwrap(),
+        ];
+        let schema = TableSchema::new(&cols);
+        let tuple = Tuple::new(&[
+            Value::Int(7),
+            Value::VarChar("bob".into()),
+            Value::Float(3.5),
+        ]);
+        let bytes = tuple.serialize(&schema);
+
+        // header: null_map(1) + int(4) + vc_offset(2) + vc_len(2) + float(4) = 13
+        // variable: "bob"(3) = 3; total = 16
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(bytes[0], 0);
+        assert_eq!(&bytes[1..5], &7i32.to_be_bytes());
+        assert_eq!(&bytes[9..13], &3.5f32.to_be_bytes());
+        assert_eq!(&bytes[13..16], b"bob");
+    }
+}

@@ -66,6 +66,7 @@ impl Database {
         for entry in catalog.entries() {
             let file_id = buffer_manager
                 .storage_manager
+                .borrow_mut()
                 .open_or_create_file(Path::new(&entry.file_name))?;
             let table = Table::open(TableId(file_id), &entry.table_name, &entry.schema);
             tables.insert(TableId(file_id), table);
@@ -103,6 +104,7 @@ impl Database {
             let fid = TableId(
                 self.buffer_manager
                     .storage_manager
+                    .borrow_mut()
                     .open_or_create_file(path.as_path())?,
             );
             self.table_names.insert(String::from(name), fid);
@@ -113,6 +115,7 @@ impl Database {
         let fid = self
             .buffer_manager
             .storage_manager
+            .borrow_mut()
             .open_or_create_file(path.as_path())?;
 
         let catalog_entry = CatalogEntry {

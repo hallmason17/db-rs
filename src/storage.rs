@@ -226,4 +226,144 @@ impl StorageManager {
     }
 }
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn setup() -> (tempfile::TempDir, StorageManager) {
+        let dir = tempdir().unwrap();
+        let sm = StorageManager::new(dir.path()).unwrap();
+        (dir, sm)
+    }
+
+    #[test]
+    fn open_or_create_returns_file_id() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid = sm.open_or_create_file(&path).unwrap();
+        assert_eq!(fid, 1);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn open_existing_file_returns_same_id() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid1 = sm.open_or_create_file(&path).unwrap();
+        let fid2 = sm.open_or_create_file(&path).unwrap();
+        assert_eq!(fid1, fid2);
+    }
+
+    #[test]
+    fn write_then_read_block_roundtrip() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid = sm.open_or_create_file(&path).unwrap();
+
+        let mut data = [0u8; PAGE_SIZE];
+        data[0..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        sm.write_block(
+            &PageId {
+                file_id: fid,
+                page_num: 0,
+            },
+            &data,
+        )
+        .unwrap();
+
+        let mut buf = [0u8; PAGE_SIZE];
+        sm.read_block(
+            &PageId {
+                file_id: fid,
+                page_num: 0,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        assert_eq!(buf[0..4], [0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn write_block_auto_extends_file() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid = sm.open_or_create_file(&path).unwrap();
+
+        // file starts at 1 page; write_block calls ensure_capacity(fid, 15)
+        let page = [0u8; PAGE_SIZE];
+        sm.write_block(
+            &PageId {
+                file_id: fid,
+                page_num: 15,
+            },
+            &page,
+        )
+        .unwrap();
+
+        let foot = sm.state.files.get(&fid).unwrap().metadata.num_pages;
+        assert!(foot >= 15, "file should have at least 15 pages, got {foot}");
+    }
+
+    #[test]
+    fn read_block_file_not_found() {
+        let (_dir, sm) = setup();
+        let mut buf = [0u8; PAGE_SIZE];
+        let result = sm.read_block(
+            &PageId {
+                file_id: 999,
+                page_num: 0,
+            },
+            &mut buf,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_block_page_not_found() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid = sm.open_or_create_file(&path).unwrap();
+        let mut buf = [0u8; PAGE_SIZE];
+        let result = sm.read_block(
+            &PageId {
+                file_id: fid,
+                page_num: 999,
+            },
+            &mut buf,
+        );
+        assert!(matches!(result.unwrap_err(), DbError::PageNotFound));
+    }
+
+    #[test]
+    fn corrupt_magic_number_rejected() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.db");
+
+        // Write a page-sized file with wrong magic number in the footer.
+        let mut f = std::fs::File::create(&path).unwrap();
+        let page = [0u8; PAGE_SIZE];
+        f.write_all(&page).unwrap();
+        let bad_footer = PageFileFooter {
+            magic_number: 0xBAD,
+            num_pages: 1,
+        };
+        f.write_all(&bad_footer.to_be_bytes()).unwrap();
+        drop(f);
+
+        let mut sm = StorageManager::new(dir.path()).unwrap();
+        let result = sm.open_or_create_file(&path);
+        assert!(matches!(result.unwrap_err(), DbError::CorruptPageFile));
+    }
+
+    #[test]
+    fn ensure_capacity_grows_file() {
+        let (dir, mut sm) = setup();
+        let path = dir.path().join("test.db");
+        let fid = sm.open_or_create_file(&path).unwrap();
+
+        sm.ensure_capacity(fid, 10).unwrap();
+
+        let num = sm.state.files.get(&fid).unwrap().metadata.num_pages;
+        assert_eq!(num, 10);
+    }
+}

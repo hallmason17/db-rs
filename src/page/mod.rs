@@ -300,3 +300,90 @@ impl SlotArrayEntry {
         bytes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockSlottedPage {
+        data: [u8; PAGE_SIZE],
+    }
+    impl MockSlottedPage {
+        fn new(page_id: u64, kind: PageKind) -> Self {
+            let mut data = [0u8; PAGE_SIZE];
+            let mut header = PageHeaderMut::new(&mut data[..page_header_offsets::SIZE]);
+            header.set_page_id(page_id);
+            header.set_kind(kind);
+            header.set_num_entries(0);
+            Self { data }
+        }
+    }
+    impl PageAccessor for MockSlottedPage {
+        fn data(&self) -> &[u8; PAGE_SIZE] {
+            &self.data
+        }
+    }
+    impl PageAccessorMut for MockSlottedPage {
+        fn data_mut(&mut self) -> &mut [u8; PAGE_SIZE] {
+            &mut self.data
+        }
+    }
+    impl SlottedPage for MockSlottedPage {}
+    impl SlottedPageMut for MockSlottedPage {}
+
+    #[test]
+    fn insert_then_read_back() {
+        let mut page = MockSlottedPage::new(0, PageKind::Heap);
+        let payload = b"hello, world!";
+
+        let eid = page.insert(payload).unwrap();
+        assert_eq!(eid.page, 0);
+        assert_eq!(eid.slot, 0);
+
+        let read = page.get_slot(0).unwrap().unwrap();
+        assert_eq!(read, payload);
+    }
+
+    #[test]
+    fn insert_multiple_preserves_order() {
+        let mut page = MockSlottedPage::new(0, PageKind::Heap);
+
+        let eid0 = page.insert(b"first").unwrap();
+        let eid1 = page.insert(b"second").unwrap();
+        let eid2 = page.insert(b"third").unwrap();
+
+        assert_eq!(eid0.slot, 0);
+        assert_eq!(eid1.slot, 1);
+        assert_eq!(eid2.slot, 2);
+
+        assert_eq!(page.get_slot(0).unwrap().unwrap(), b"first");
+        assert_eq!(page.get_slot(1).unwrap().unwrap(), b"second");
+        assert_eq!(page.get_slot(2).unwrap().unwrap(), b"third");
+    }
+
+    #[test]
+    fn page_full_when_slot_array_meets_data() {
+        let mut page = MockSlottedPage::new(0, PageKind::Heap);
+
+        let big = vec![0u8; PAGE_SIZE - page_header_offsets::SIZE - size_of::<SlotArrayEntry>()];
+        let result = page.insert(&big);
+        assert!(result.is_ok(), "should fit exactly once");
+
+        let one_byte_too_many = vec![0u8; 1];
+        let result = page.insert(&one_byte_too_many);
+        assert!(result.is_err(), "should be full");
+    }
+
+    #[test]
+    fn get_slot_out_of_bounds_returns_none() {
+        let page = MockSlottedPage::new(0, PageKind::Heap);
+        assert!(page.get_slot(0).unwrap().is_none());
+    }
+
+    #[test]
+    fn get_slot_array_entry_out_of_bounds() {
+        let page = MockSlottedPage::new(0, PageKind::Heap);
+        let result = page.get_slot_array_entry(0);
+        assert!(result.is_err());
+    }
+}

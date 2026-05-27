@@ -110,3 +110,51 @@ impl Ord for Value {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cross_type_equality_int_float() {
+        assert_eq!(Value::Int(42), Value::Float(42.0));
+        assert_eq!(Value::Float(3.0), Value::Int(3));
+        assert_ne!(Value::Float(3.14), Value::Int(3));
+        assert_ne!(Value::Int(1), Value::VarChar("1".into()));
+        assert_ne!(Value::Null, Value::Int(0));
+    }
+
+    #[test]
+    fn null_equality_only_with_itself() {
+        assert_eq!(Value::Null, Value::Null);
+        assert_ne!(Value::Null, Value::Boolean(false));
+        assert_ne!(Value::Int(0), Value::Null);
+    }
+
+    #[test]
+    fn cross_type_ordering() {
+        assert!(Value::Null < Value::Int(0));
+        assert!(Value::Null < Value::Float(-1.0));
+        assert!(Value::Boolean(true) < Value::Int(0));
+        assert!(Value::Int(0) < Value::VarChar("".into()));
+        assert!(Value::Float(std::f32::NEG_INFINITY) > Value::Null);
+        assert!(Value::VarChar("a".into()) > Value::Int(9999));
+        assert!(Value::Blob(vec![0]) > Value::Int(9999));
+    }
+
+    #[test]
+    fn same_type_ordering_within_type() {
+        assert!(Value::Int(1) < Value::Int(2));
+        assert!(Value::Float(1.5) > Value::Float(1.0));
+        assert!(Value::VarChar("a".into()) < Value::VarChar("b".into()));
+        assert!(Value::Boolean(false) == Value::Boolean(false));
+        assert!(Value::Blob(vec![1, 2]) < Value::Blob(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn int_float_cross_type_ordering() {
+        assert_eq!(Value::Int(5).cmp(&Value::Float(5.0)), Ordering::Equal);
+        assert!(Value::Int(5) < Value::Float(5.5));
+        assert!(Value::Float(4.9) < Value::Int(5));
+    }
+}
