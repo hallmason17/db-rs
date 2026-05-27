@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let record = tuple.serialize(&schema);
 
-    for _ in 0..100000 {
+    for _ in 0..100 {
         db.insert_record(table, &record)?;
     }
 
