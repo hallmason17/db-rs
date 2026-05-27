@@ -2,7 +2,8 @@ use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     storage::StorageManager,
-    tables::{ColumnDefinition, DataType, TableSchema, Tuple, Value},
+    tables::{ColumnDefinition, TableSchema, Tuple},
+    value::{DataType, Value},
 };
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 

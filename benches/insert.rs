@@ -1,15 +1,27 @@
 use std::path::PathBuf;
 
+<<<<<<< HEAD
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+=======
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+>>>>>>> github/main
 
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     storage::StorageManager,
+<<<<<<< HEAD
     tables::{ColumnDefinition, DataType, TableSchema, Tuple, Value},
 };
 
 fn setup_table(name: &str) -> (Database, u32) {
+=======
+    tables::{ColumnDefinition, TableSchema, Tuple},
+    value::{DataType, Value},
+};
+
+fn setup_table(name: &str) -> (Database, u32, TableSchema) {
+>>>>>>> github/main
     let dir = PathBuf::from(format!("./bench_data_{name}"));
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -17,7 +29,11 @@ fn setup_table(name: &str) -> (Database, u32) {
 
     let sm = StorageManager::new(dir.as_path()).unwrap();
 
+<<<<<<< HEAD
     let bm = BufferPool::new(65536, ReplacementStrategy::Clock, sm).unwrap();
+=======
+    let bm = BufferPool::new(128, ReplacementStrategy::Clock, sm).unwrap();
+>>>>>>> github/main
 
     let mut db = Database::open(dir.as_path().into(), bm).unwrap();
 
@@ -30,7 +46,11 @@ fn setup_table(name: &str) -> (Database, u32) {
     let schema = TableSchema::new(&attributes);
 
     let table = db.create_table(name, &schema).unwrap();
+<<<<<<< HEAD
     (db, table)
+=======
+    (db, table, schema)
+>>>>>>> github/main
 }
 
 fn make_record(i: i32, schema: &TableSchema) -> Vec<u8> {
@@ -50,6 +70,7 @@ fn bench_single_thread_insert(c: &mut Criterion) {
             BenchmarkId::from_parameter(inserts),
             &inserts,
             |b, &inserts| {
+<<<<<<< HEAD
                 let (mut db, table) = setup_table(&format!("single_thread_{inserts}"));
 
                 let attributes = vec![
@@ -69,6 +90,19 @@ fn bench_single_thread_insert(c: &mut Criterion) {
                         std::hint::black_box(db.insert_record(table, &record).unwrap());
                     }
                 });
+=======
+                b.iter_batched(
+                    || setup_table("bench"),
+                    |(mut db, table, schema)| {
+                        for i in 0..inserts {
+                            let record = make_record(i, &schema);
+
+                            std::hint::black_box(db.insert_record(table, &record).unwrap());
+                        }
+                    },
+                    BatchSize::SmallInput,
+                );
+>>>>>>> github/main
             },
         );
     }
@@ -76,6 +110,7 @@ fn bench_single_thread_insert(c: &mut Criterion) {
     group.finish();
 }
 
+<<<<<<< HEAD
 /*
 fn bench_multi_thread_single_table(c: &mut Criterion) {
     let mut group = c.benchmark_group("multi_thread_single_table");
@@ -180,6 +215,8 @@ fn bench_multi_thread_multi_table(c: &mut Criterion) {
 }
 */
 
+=======
+>>>>>>> github/main
 criterion_group!(benches, bench_single_thread_insert);
 
 criterion_main!(benches);

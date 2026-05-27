@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    DbError, Frame, FrameHandle, PageGuard, PageId,
+    Frame, PageGuard, PageId,
+    error::{DbError, DbResult},
     page::{PageHeaderMut, PageKind},
     page_header_offsets,
     storage::StorageManager,
@@ -28,17 +29,12 @@ pub struct BufferPool {
     page_table: HashMap<PageId, FrameNum>,
 }
 
-struct FrameTableEntry {
-    frame: u64,
-    page: PageId,
-}
-
 impl BufferPool {
     pub fn new(
         num_pages: u64,
         replacement_strategy: ReplacementStrategy,
         storage_manager: StorageManager,
-    ) -> anyhow::Result<Self> {
+    ) -> DbResult<Self> {
         let mut frames = vec![];
         let mut free_frames = vec![];
         for i in 0..num_pages {
@@ -54,7 +50,7 @@ impl BufferPool {
             storage_manager,
         })
     }
-    pub fn flush_all(&mut self) -> anyhow::Result<()> {
+    pub fn flush_all(&mut self) -> DbResult<()> {
         for frame in &mut self.frames {
             let state = frame.state.borrow();
             if state.dirty {
@@ -96,7 +92,7 @@ impl BufferPool {
             }
         }
     }
-    fn evict_page(&mut self, frame_num: FrameNum) -> anyhow::Result<()> {
+    fn evict_page(&mut self, frame_num: FrameNum) -> DbResult<()> {
         let frame = &mut self.frames[usize::try_from(frame_num)?];
         tracing::warn!("EVICTING FRAME: {}, {:?}", frame_num, frame.state.borrow());
         let state = &mut frame.state.borrow_mut();
@@ -116,9 +112,9 @@ impl BufferPool {
         Ok(())
     }
 
-    pub fn get_page(&mut self, page_id: PageId) -> anyhow::Result<PageGuard<'_>> {
+    pub fn get_page(&mut self, page_id: PageId) -> DbResult<PageGuard<'_>> {
         if let Some(frame_num) = self.find_entry_in_map(page_id) {
-            tracing::warn!("HIT {:?} PAGE TABLE {:?}", page_id, self.page_table);
+            tracing::trace!("HIT {:?} PAGE TABLE {:?}", page_id, self.page_table);
             let frame = &self.frames[usize::try_from(frame_num)?];
             frame.pin();
             Ok(PageGuard { frame, page_id })
@@ -139,7 +135,7 @@ impl BufferPool {
             }
             assert!(!self.page_table.contains_key(&page_id));
             self.page_table.insert(page_id, frame_index);
-            tracing::warn!("INSERT PAGE {:?} INTO FRAME {}", page_id, frame_index);
+            tracing::trace!("INSERT PAGE {:?} INTO FRAME {}", page_id, frame_index);
             frame.pin();
 
             // If this fails we need to unpin!!!!!!!!! Hours of debugging later...
@@ -150,16 +146,16 @@ impl BufferPool {
                 frame.unpin();
                 self.page_table.remove(&page_id);
                 frame.state.borrow_mut().page_id = None;
-                return Err(e.into());
+                return Err(e);
             }
 
             Ok(PageGuard { frame, page_id })
         } else {
-            Err(DbError::NoPagesAvailable.into())
+            Err(DbError::NoPagesAvailable)
         }
     }
 
-    pub fn create_page(&mut self, file_id: u32, kind: PageKind) -> anyhow::Result<PageGuard<'_>> {
+    pub fn create_page(&mut self, file_id: u32, kind: PageKind) -> DbResult<PageGuard<'_>> {
         if let Some(frame_index) = self.select_victim() {
             let page_num = self.storage_manager.get_next_page_id(file_id)?;
             tracing::debug!("next page id: {}", page_num);
@@ -203,139 +199,10 @@ impl BufferPool {
                     .collect::<Vec<_>>(),
                 self.page_table
             );
-            Err(DbError::Unknown.into())
+            Err(DbError::Unknown)
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-
-    /*
-       fn setup_bp(num_pages: u64) -> BufferPool {
-           let dir = tempdir().unwrap();
-           let sm = Arc::new(RwLock::new(
-               StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap(),
-           ));
-           sm.write().ensure_capacity(0, 31).unwrap();
-           BufferPool::new(num_pages, ReplacementStrategy::Clock, sm);
-       }
-
-       #[test]
-       fn test_buffer_pool_initialization() {
-           let bp = setup_bp(3);
-           assert_eq!(bp.free_frames.lock().len(), 3);
-           assert_eq!(bp.frames.len(), 3);
-       }
-
-       #[test]
-       fn test_pin_and_unpin_logic() {
-           let bp = setup_bp(3);
-
-           {
-               let handle = bp
-                   .get_page(&PageId {
-                       file_id: 0,
-                       page_num: 0,
-                   })
-                   .expect("Should pin page 0");
-               assert_eq!(handle.frame.pin_count.load(Ordering::Relaxed), 1);
-               assert!(
-                   bp.page_to_frame_map
-                       .read()
-                       .get(&PageId {
-                           file_id: 0,
-                           page_num: 0
-                       })
-                       .is_some()
-               );
-
-               let handle2 = bp
-                   .get_page(&PageId {
-                       file_id: 0,
-                       page_num: 0,
-                   })
-                   .expect("Should pin page 0 again");
-               assert!(handle2.frame.pin_count.load(Ordering::Relaxed) >= 1);
-               assert!(
-                   bp.page_to_frame_map
-                       .read()
-                       .get(&PageId {
-                           file_id: 0,
-                           page_num: 0
-                       })
-                       .is_some()
-               );
-           }
-
-           let frame_idx = *bp
-               .page_to_frame_map
-               .read()
-               .get(&PageId {
-                   file_id: 0,
-                   page_num: 0,
-               })
-               .unwrap();
-           assert_eq!(
-               bp.frames[frame_idx as usize]
-                   .pin_count
-                   .load(Ordering::Relaxed),
-               0
-           );
-       }
-
-       #[test]
-       fn test_clock_eviction_strategy() {
-           let bp = setup_bp(2);
-
-           {
-               let _h1 = bp
-                   .get_page(&PageId {
-                       file_id: 0,
-                       page_num: 10,
-                   })
-                   .unwrap();
-               let _h2 = bp
-                   .get_page(&PageId {
-                       file_id: 0,
-                       page_num: 20,
-                   })
-                   .unwrap();
-           }
-           bp.get_page(&PageId {
-               file_id: 0,
-               page_num: 30,
-           })
-           .expect("Should evict a page to make room for page 30");
-
-           let map = bp.page_to_frame_map.read();
-           println!("{:?}", map);
-           assert!(map.keys().any(|&v| v.page_num == 30));
-           assert_eq!(map.len(), 2);
-       }
-
-       #[test]
-       fn test_all_pages_pinned_error() {
-           let bp = setup_bp(2);
-
-           let _h1 = bp
-               .get_page(&PageId {
-                   file_id: 0,
-                   page_num: 1,
-               })
-               .unwrap();
-           let _h2 = bp
-               .get_page(&PageId {
-                   file_id: 0,
-                   page_num: 2,
-               })
-               .unwrap();
-
-           let result = bp.get_page(&PageId {
-               file_id: 0,
-               page_num: 3,
-           });
-           assert!(result.is_err(), "Should fail when no victims are available");
-       }
-    */
-}
+mod tests {}

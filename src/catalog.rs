@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
+    error::DbResult,
     page::{PageAccessor, PageHeaderReader, SlottedPageMut},
     tables::TableSchema,
 };
@@ -14,7 +15,7 @@ pub struct CatalogEntry {
     pub schema: Vec<u8>,
 }
 impl CatalogEntry {
-    pub fn to_be_bytes(self) -> anyhow::Result<Vec<u8>> {
+    pub fn to_be_bytes(self) -> DbResult<Vec<u8>> {
         let mut bytes = vec![];
 
         let mut len = u8::try_from(self.table_name.len())?;
@@ -52,10 +53,10 @@ impl CatalogEntry {
 }
 
 pub trait Catalog {
-    fn create_table(&mut self, name: &str, schema: &TableSchema) -> anyhow::Result<()>;
+    fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<()>;
     fn get_schema(&self, name: &str) -> Option<&TableSchema>;
     fn list_tables(&self) -> Vec<String>;
-    fn drop_table(&mut self) -> anyhow::Result<()>;
+    fn drop_table(&mut self) -> DbResult<()>;
 }
 
 #[derive(Debug)]
@@ -63,7 +64,7 @@ pub struct CatalogManager {
     tables: HashMap<String, TableSchema>,
 }
 impl CatalogManager {
-    pub fn new(buffer_manager: &mut BufferPool) -> anyhow::Result<Self> {
+    pub fn new(buffer_manager: &mut BufferPool) -> DbResult<Self> {
         let mut tables = HashMap::new();
         let mut page = buffer_manager.get_page(CATALOG_PAGE_ID)?;
         let mut catalog = page.as_catalog_mut()?;
@@ -95,7 +96,7 @@ impl CatalogManager {
 }
 
 impl Catalog for CatalogManager {
-    fn create_table(&mut self, name: &str, schema: &TableSchema) -> anyhow::Result<()> {
+    fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<()> {
         self.tables.insert(name.to_string(), schema.clone());
 
         // 3. insert to in-mem map
@@ -110,7 +111,7 @@ impl Catalog for CatalogManager {
         self.tables.keys().map(String::from).collect::<Vec<_>>()
     }
 
-    fn drop_table(&mut self) -> anyhow::Result<()> {
+    fn drop_table(&mut self) -> DbResult<()> {
         todo!()
     }
 }

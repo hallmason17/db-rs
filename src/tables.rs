@@ -1,17 +1,12 @@
-use anyhow::{Context, Result};
-use parking_lot::RwLock;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
-
 use crate::{
-    DbError, DbInputError, DbResult, PageId,
+    PageId,
     buffer_pool::BufferPool,
+    error::{DbError, DbInputError, DbResult},
     page::{
         PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
         fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
     },
+    value::{DataType, Value},
 };
 
 #[allow(dead_code)]
@@ -121,57 +116,6 @@ impl Tuple {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(u8)]
-pub enum DataType {
-    Int,
-    VarChar,
-    Float,
-    Boolean,
-    Blob,
-}
-impl DataType {
-    fn from_u8(byte: u8) -> Self {
-        match byte {
-            0 => Self::Int,
-            1 => Self::VarChar,
-            2 => Self::Float,
-            3 => Self::Boolean,
-            4 => Self::Blob,
-            _ => unreachable!(),
-        }
-    }
-    fn size(&self) -> usize {
-        match self {
-            Self::Int | Self::Float => 4,
-            Self::Boolean => 1,
-            Self::VarChar | Self::Blob => 4,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Value {
-    Int(i32),
-    VarChar(String),
-    Float(f32),
-    Boolean(bool),
-    Blob(Vec<u8>),
-    Null,
-}
-impl Value {
-    pub fn size(&self) -> usize {
-        match self {
-            Self::Int(i) => size_of_val(i),
-            Self::Float(f) => size_of_val(f),
-            Self::VarChar(s) => s.len(),
-            Self::Boolean(_) => 1,
-            Self::Blob(b) => b.len(),
-            Self::Null => 0,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ColumnDefinition {
@@ -197,7 +141,7 @@ impl ColumnDefinition {
             is_nullable,
         })
     }
-    pub fn to_be_bytes(&self) -> Result<Vec<u8>> {
+    pub fn to_be_bytes(&self) -> DbResult<Vec<u8>> {
         let mut bytes = vec![];
         let name_len = u8::try_from(self.name.len())?;
         bytes.extend_from_slice(&name_len.to_be_bytes());
@@ -208,7 +152,7 @@ impl ColumnDefinition {
         Ok(bytes)
     }
 
-    pub fn from_be_bytes(bytes: &[u8]) -> Result<(Self, usize)> {
+    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<(Self, usize)> {
         let mut data = bytes;
         let mut len = 4;
         let name_len = data[0] as usize;
@@ -258,7 +202,7 @@ impl TableSchema {
             attributes: attributes.to_vec(),
         }
     }
-    pub fn to_be_bytes(&self) -> Result<Vec<u8>> {
+    pub fn to_be_bytes(&self) -> DbResult<Vec<u8>> {
         let mut bytes = vec![];
 
         let num_attrs = u32::try_from(self.attributes.len())?;
@@ -269,14 +213,10 @@ impl TableSchema {
         }
         Ok(bytes)
     }
-    pub fn from_be_bytes(bytes: &[u8]) -> Result<Self> {
+    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<Self> {
         let mut data = bytes;
 
-        let num_attrs = u32::from_be_bytes(
-            bytes[0..4]
-                .try_into()
-                .context("Failed to get u32 num_attrs.")?,
-        );
+        let num_attrs = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
         data = &data[4..];
         let mut attrs = Vec::new();
         tracing::debug!("Serializing {} attrs from {:?}", num_attrs, data);
@@ -292,52 +232,45 @@ impl TableSchema {
 const FIRST_FSM_PAGE: u64 = 1;
 
 pub struct HeapStorage<'a> {
-    table: &'a Table,
+    table: &'a mut Table,
     bp: &'a mut BufferPool,
-    current_fsm_idx: u64,
-    last_known_free_page: u64,
 }
 
 impl<'a> HeapStorage<'a> {
-    pub fn new(table: &'a Table, bp: &'a mut BufferPool) -> Self {
-        Self {
-            table,
-            bp,
-            current_fsm_idx: FIRST_FSM_PAGE,
-            last_known_free_page: 2,
-        }
+    pub fn new(table: &'a mut Table, bp: &'a mut BufferPool) -> Self {
+        Self { table, bp }
     }
 
-    fn find_page_with_free_space(&mut self) -> anyhow::Result<u64> {
+    fn find_page_with_free_space(&mut self) -> DbResult<u64> {
         let ffp = {
             let fsm = self.bp.get_page(PageId {
                 file_id: self.table.id,
-                page_num: self.current_fsm_idx,
+                page_num: self.table.current_fsm_idx,
             })?;
 
             let fsm_page = fsm.as_fsm()?;
-            fsm_page.find_first_free_page(self.last_known_free_page)
+            fsm_page.find_first_free_page(self.table.last_known_free_page)
         };
 
-        self.last_known_free_page = ffp;
+        self.table.last_known_free_page = ffp;
         Ok(ffp)
     }
 
-    fn set_fsm_page_full(&mut self, page_num: u64) -> anyhow::Result<()> {
+    fn set_fsm_page_full(&mut self, page_num: u64) -> DbResult<()> {
         let mut fsm = self.bp.get_page(PageId {
             file_id: self.table.id,
-            page_num: self.current_fsm_idx,
+            page_num: self.table.current_fsm_idx,
         })?;
         let mut fsm_page = fsm.as_fsm_mut()?;
         fsm_page.set_page_full(page_num);
         Ok(())
     }
 
-    fn is_fsm_full(&mut self) -> anyhow::Result<bool> {
+    fn is_fsm_full(&mut self) -> DbResult<bool> {
         let full = {
             let fsm = self.bp.get_page(PageId {
                 file_id: self.table.id,
-                page_num: self.current_fsm_idx,
+                page_num: self.table.current_fsm_idx,
             })?;
 
             let fsm_page = fsm.as_fsm()?;
@@ -347,7 +280,7 @@ impl<'a> HeapStorage<'a> {
         Ok(full)
     }
 
-    fn handle_full_page(&mut self, page_num: u64) -> anyhow::Result<()> {
+    fn handle_full_page(&mut self, page_num: u64) -> DbResult<()> {
         tracing::warn!("Setting page {page_num} full");
         self.set_fsm_page_full(page_num)?;
         let is_fsm_full = self.is_fsm_full()?;
@@ -363,22 +296,21 @@ impl<'a> HeapStorage<'a> {
 
             let mut old_fsm = self.bp.get_page(PageId {
                 file_id: self.table.id,
-                page_num: self.current_fsm_idx,
+                page_num: self.table.current_fsm_idx,
             })?;
             let mut old_fsm_page = old_fsm.as_fsm_mut()?;
             old_fsm_page.header_mut().set_next_page(new_fsm_num);
-            self.current_fsm_idx = new_fsm_num;
+            self.table.current_fsm_idx = new_fsm_num;
 
-            tracing::warn!("FSM full! Created new one at {:?}", self.current_fsm_idx);
+            tracing::warn!(
+                "FSM full! Created new one at {:?}",
+                self.table.current_fsm_idx
+            );
         }
         Ok(())
     }
 
-    fn try_insert_into_page(
-        &mut self,
-        page_num: u64,
-        record: &[u8],
-    ) -> anyhow::Result<Option<RecordId>> {
+    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> DbResult<Option<RecordId>> {
         let mut page = if let Ok(page) = self.bp.get_page(PageId {
             file_id: self.table.id,
             page_num,
@@ -399,14 +331,24 @@ impl<'a> HeapStorage<'a> {
         Ok(rid)
     }
 
-    // TODO: record is just a byte slice atm. replace with something more
-    // sophisticated (RecordBuilder based on schema?)
-    pub fn insert_record(&mut self, record: &[u8]) -> anyhow::Result<RecordId> {
+    pub fn insert_record(&mut self, record: &[u8]) -> DbResult<RecordId> {
         tracing::debug!("Inserting record: {:?}", record);
+
+        if let Some(page_num) = self.table.current_heap_page {
+            match self.try_insert_into_page(page_num, record)? {
+                Some(rid) => return Ok(rid),
+                None => {
+                    self.set_fsm_page_full(page_num)?;
+                    self.table.current_heap_page = None;
+                }
+            }
+        }
+
         let mut free_page = {
             let mut pnum = self.find_page_with_free_space()?;
             if pnum == u64::MAX {
                 let new_page = self.bp.create_page(self.table.id, PageKind::Heap)?;
+                self.table.current_heap_page = Some(new_page.page_id.page_num);
                 pnum = new_page.page_id.page_num;
                 tracing::warn!("Created page {pnum}");
             }
@@ -418,6 +360,7 @@ impl<'a> HeapStorage<'a> {
                 Some(rid) => return Ok(rid),
                 None => {
                     self.handle_full_page(free_page)?;
+                    self.table.current_heap_page = None;
                     free_page = self.find_page_with_free_space()?;
                 }
             }
@@ -431,6 +374,9 @@ pub struct Table {
     pub id: u32,
     name: String,
     schema: TableSchema,
+    current_fsm_idx: u64,
+    last_known_free_page: u64,
+    current_heap_page: Option<u64>,
 }
 impl Table {
     pub fn new(
@@ -438,9 +384,7 @@ impl Table {
         schema: &TableSchema,
         bp: &mut BufferPool,
         file_id: u32,
-    ) -> anyhow::Result<Self> {
-        // 1. Register with catalog, get file_id.
-
+    ) -> DbResult<Self> {
         // 2. Initialize the page file.
         // 2.1 Catalog file initialization (write schema).
         let num_entries = {
@@ -466,14 +410,18 @@ impl Table {
                 let mut page = bp.create_page(file_id, PageKind::FreeSpaceMap)?;
                 let mut page = page.as_fsm_mut()?;
                 page.set_fsm_num(0);
-                assert!(page.header().page_id() == 1);
+                if page.header().page_id() != 1 {
+                    return Err(DbError::CorruptPageFile);
+                }
             }
             // 2.3 Make the first heap page for storage
             {
                 let mut page = bp.create_page(file_id, PageKind::Heap)?;
                 //assert!(page.handle.page_id.page_num == 2);
                 let page = page.as_heap_mut()?;
-                assert!(page.header().page_id() == 2);
+                if page.header().page_id() != 2 {
+                    return Err(DbError::CorruptPageFile);
+                }
             }
         }
 
@@ -481,6 +429,9 @@ impl Table {
             name: name.to_string(),
             id: file_id,
             schema: schema.clone(),
+            current_fsm_idx: FIRST_FSM_PAGE,
+            last_known_free_page: 2,
+            current_heap_page: None,
         })
     }
 
@@ -489,10 +440,13 @@ impl Table {
             id,
             name: name.to_string(),
             schema: schema.clone(),
+            current_fsm_idx: FIRST_FSM_PAGE,
+            last_known_free_page: 2,
+            current_heap_page: None,
         }
     }
 
-    pub fn insert(&self, record: &[u8], bp: &mut BufferPool) -> anyhow::Result<RecordId> {
+    pub fn insert(&mut self, record: &[u8], bp: &mut BufferPool) -> DbResult<RecordId> {
         let mut storage = HeapStorage::new(self, bp);
         storage.insert_record(record)
     }

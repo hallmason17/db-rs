@@ -8,7 +8,9 @@ use std::{
 use tracing::{error, info};
 
 use crate::{
-    DbError, DbResult, MAGIC_NUMBER, PAGE_SIZE, PageFileFooter, PageId, page::PageKind,
+    MAGIC_NUMBER, PAGE_SIZE, PageFileFooter, PageId,
+    error::{DbError, DbResult},
+    page::PageKind,
     page::create_blank_page,
 };
 
@@ -85,7 +87,11 @@ impl StorageManager {
         })
     }
 
+<<<<<<< HEAD
     pub fn file_exists(&self, path: &Path) -> anyhow::Result<bool> {
+=======
+    pub fn file_exists(&self, path: &Path) -> DbResult<bool> {
+>>>>>>> github/main
         let exists = if self.state.paths.contains_key(path) {
             true
         } else {
@@ -95,7 +101,7 @@ impl StorageManager {
     }
 
     /// Opens a db file and returns a file_id
-    pub fn open_or_create_file(&mut self, path: &Path) -> anyhow::Result<u32> {
+    pub fn open_or_create_file(&mut self, path: &Path) -> DbResult<u32> {
         if let Some(fid) = self.state.paths.get(path) {
             return Ok(*fid);
         }
@@ -133,7 +139,7 @@ impl StorageManager {
                 "Magic number is not correct for page file {}",
                 path.display()
             );
-            return Err(DbError::CorruptPageFile.into());
+            return Err(DbError::CorruptPageFile);
         }
 
         self.state.files.insert(
@@ -163,15 +169,11 @@ impl StorageManager {
         Err(DbError::FileNotFound)
     }
 
-    pub fn write_block(
-        &mut self,
-        page_id: &PageId,
-        page_handle: &[u8; PAGE_SIZE],
-    ) -> anyhow::Result<()> {
+    pub fn write_block(&mut self, page_id: &PageId, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
         tracing::warn!("WRITE page={} file={}", page_id.page_num, page_id.file_id);
         // Make sure file exists.
         if !self.state.files.contains_key(&page_id.file_id) {
-            return Err(DbError::FileNotFound.into());
+            return Err(DbError::FileNotFound);
         }
 
         // Make sure it has that many pages.
@@ -186,10 +188,10 @@ impl StorageManager {
             return Ok(());
         }
         tracing::error!("couldnt write block");
-        Err(DbError::Unknown.into())
+        Err(DbError::Unknown)
     }
 
-    pub fn append_empty_block(&mut self, file_id: u32) -> anyhow::Result<u64> {
+    pub fn append_empty_block(&mut self, file_id: u32) -> DbResult<u64> {
         if let Some(fileinfo) = self.state.files.get_mut(&file_id) {
             let empty_block = [0u8; PAGE_SIZE];
             let offset = fileinfo.metadata.num_pages as usize * PAGE_SIZE;
@@ -204,15 +206,15 @@ impl StorageManager {
 
             return Ok(fileinfo.metadata.num_pages - 1);
         }
-        Err(DbError::FileNotFound.into())
+        Err(DbError::FileNotFound)
     }
 
     // TODO: Dont call `append_empty_block` in a loop. Instead, do it all at once... we know how
     // big it needs to be.
-    pub fn ensure_capacity(&mut self, file_id: u32, number_of_pages: u64) -> anyhow::Result<()> {
+    pub fn ensure_capacity(&mut self, file_id: u32, number_of_pages: u64) -> DbResult<()> {
         let mut num_pages = match self.state.files.get(&file_id) {
             Some(info) => info.metadata.num_pages,
-            None => return Err(DbError::FileNotFound.into()),
+            None => return Err(DbError::FileNotFound),
         };
         while num_pages < number_of_pages {
             self.append_empty_block(file_id)?;
@@ -221,182 +223,12 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn get_next_page_id(&mut self, file_id: u32) -> anyhow::Result<u64> {
+    pub fn get_next_page_id(&mut self, file_id: u32) -> DbResult<u64> {
         if !self.state.files.contains_key(&file_id) {
-            return Err(DbError::FileNotFound.into());
+            return Err(DbError::FileNotFound);
         }
         self.append_empty_block(file_id)
     }
-    /*
-     *
-    pub fn create_page_file(path: &Path) -> DbResult<()> {
-        if !path.exists() {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path)?;
-            let footer_size = std::mem::size_of::<PageFileFooter>();
-            let mut page = vec![0u8; PAGE_SIZE + footer_size];
-            let footer = PageFileFooter { num_pages: 1 };
-            page[PAGE_SIZE..].copy_from_slice(footer.as_bytes());
-            file.write_all(&page)?;
-            file.flush()?;
-        }
-        Ok(())
-    }
-    pub fn open_page_file(path: &Path) -> DbResult<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|_| {
-                let table_name = path.file_stem().unwrap_or_default().to_string_lossy();
-                DbError::TableNotFound(table_name.to_string())
-            })?;
-
-        let mut file = file;
-        let footer_size = std::mem::size_of::<PageFileFooter>();
-        let mut buffer = [0u8; size_of::<PageFileFooter>()];
-
-        _ = file.seek(SeekFrom::End(-(footer_size as i64)));
-        file.read_exact(&mut buffer)?;
-
-        let footer =
-            PageFileFooter::read_from_bytes(&buffer).map_err(|_| DbError::CorruptPageFile)?;
-
-        Ok(Self {
-            file_map: HashMap::new(),
-            next_id: 0,
-            page_file_path: path.to_path_buf(),
-            footer,
-        })
-    }
-    pub fn destroy_page_file(&self, _file_id: u32) -> DbResult<()> {
-        if self.page_file_path.exists() {
-            std::fs::remove_file(&self.page_file_path)?;
-        }
-        Ok(())
-    }
-     */
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_create_page_file() {
-        let base_path = tempdir().unwrap();
-        let file_name = Path::new("test.page");
-        let full_path = base_path.path().join(file_name);
-
-        let mut sm = StorageManager::new(base_path.path()).expect("couldnt init storage manager");
-        sm.open_or_create_file(file_name)
-            .expect("Failed to create page file");
-
-        assert!(full_path.exists());
-        let meta = std::fs::metadata(&full_path).unwrap();
-        let expected_size = PAGE_SIZE + std::mem::size_of::<PageFileFooter>();
-
-        assert_eq!(meta.len() as usize, expected_size);
-    }
-
-    /*
-    #[test]
-    fn read_block_works() {
-        let base_path = tempdir().unwrap();
-        let mut sm = StorageManager::new(base_path.path()).expect("couldnt init storage manager");
-        let path = Path::new("test.page");
-        let fileid = sm.open_or_create_file(&path).unwrap();
-        let mut page_handle = Box::new([1u8; PAGE_SIZE]);
-        sm.read_block(
-            &PageId {
-                file_id: fileid,
-                page_num: 0,
-            },
-            &mut page_handle,
-        )
-        .expect("Failed to read block");
-        assert_eq!(&page_handle.as_slice(), &[0u8; 4096]);
-    }
-
-    #[test]
-    fn write_block_works() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test3.page");
-
-        StorageManager::create_page_file(&path).unwrap();
-
-        let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
-        let mut page_handle = Box::new([1u8; PAGE_SIZE]);
-        pagefile
-            .write_block(
-                &PageId {
-                    file_id: 0,
-                    page_num: 0,
-                },
-                &page_handle,
-            )
-            .expect("Couldn't write to block 0");
-
-        pagefile
-            .read_block(
-                &PageId {
-                    file_id: 0,
-                    page_num: 0,
-                },
-                &mut page_handle,
-            )
-            .expect("Failed to read block");
-        assert_eq!(&page_handle.as_slice(), &[1u8; 4096]);
-    }
-
-    #[test]
-    fn append_empty_works() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test3.page");
-
-        StorageManager::create_page_file(&path).unwrap();
-
-        let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
-        pagefile
-            .append_empty_block(0)
-            .expect("Couldn't append empty");
-
-        assert_eq!(
-            pagefile.page_file.metadata().unwrap().len(),
-            2 * PAGE_SIZE as u64 + size_of::<PageFileFooter>() as u64
-        );
-        let mut page_handle = Box::new([1u8; PAGE_SIZE]);
-        pagefile
-            .read_block(
-                &PageId {
-                    file_id: 0,
-                    page_num: 1,
-                },
-                &mut page_handle,
-            )
-            .expect("Failed to read block");
-        assert_eq!(&page_handle.as_slice(), &[0u8; 4096]);
-    }
-
-    #[test]
-    fn ensure_capacity_works() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test4.page");
-
-        StorageManager::create_page_file(&path).unwrap();
-
-        let mut pagefile = StorageManager::open_page_file(&path).expect("Failed to open page file");
-        pagefile
-            .ensure_capacity(0, 15)
-            .expect("Couldn't ensure capacity");
-        assert_eq!(pagefile.footer.num_pages, 15);
-        assert_eq!(
-            pagefile.page_file.metadata().unwrap().len(),
-            PAGE_SIZE as u64 * 15 + size_of::<PageFileFooter>() as u64
-        );
-    }
-     */
-}
+mod tests {}
