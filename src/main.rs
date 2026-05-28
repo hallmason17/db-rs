@@ -9,6 +9,12 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
+    let num_inserts = 100000;
+    println!(
+        "Insert demo, inserting {num_inserts} records.
+        Run with RUST_LOG=log_level to see logs.
+        This creates '.db' files in the current directory. Feel free to delete them."
+    );
     let sm = StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap();
     let bp = BufferPool::new(1024, ReplacementStrategy::Clock, sm)?;
     let mut db = Database::open(std::env::current_dir().unwrap().as_path().into(), bp)?;
@@ -22,15 +28,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tuple = Tuple::new(&[
         Value::Int(1),
-        Value::VarChar("mason".to_string()),
-        Value::VarChar("hallmason17".to_string()),
+        Value::VarChar("asdf".to_string()),
+        Value::VarChar("asdfasdf@example.com".to_string()),
     ]);
 
     let table = db.create_table("users", &schema)?;
 
     let record = tuple.serialize(&schema);
 
-    for _ in 0..100000 {
+    for _ in 0..num_inserts {
         db.insert_record(table, &record)?;
     }
 
