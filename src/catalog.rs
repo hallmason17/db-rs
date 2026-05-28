@@ -9,7 +9,7 @@ use crate::{
     tables::TableSchema,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CatalogEntry {
     pub table_id: TableId,
     pub table_name: String,
@@ -64,7 +64,7 @@ impl CatalogEntry {
 }
 
 pub trait Catalog {
-    fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<()>;
+    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> DbResult<()>;
     fn get_schema(&self, name: &str) -> Option<&TableSchema>;
     fn list_tables(&self) -> Vec<String>;
     fn drop_table(&mut self) -> DbResult<()>;
@@ -109,10 +109,10 @@ impl CatalogManager {
 }
 
 impl Catalog for CatalogManager {
-    fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<()> {
-        //self.tables.insert(name.to_string(), schema.clone());
+    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> DbResult<()> {
+        self.tables
+            .insert(catalog_entry.table_name.clone(), catalog_entry.clone());
 
-        // 3. insert to in-mem map
         Ok(())
     }
 

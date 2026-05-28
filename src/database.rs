@@ -67,12 +67,17 @@ impl Database {
             let file_id = buffer_manager
                 .storage_manager
                 .borrow_mut()
-                .open_or_create_file(Path::new(&entry.file_name))?;
-            let table = Table::open(TableId(file_id), &entry.table_name, &entry.schema);
-            tables.insert(TableId(file_id), table);
-            table_names.insert(entry.table_name.clone(), TableId(file_id));
+                .open_or_create_file(&base_path.join(Path::new(&entry.file_name)))?;
+            let table = Table::open(
+                entry.table_id,
+                FileId(file_id),
+                &entry.table_name,
+                &entry.schema,
+            );
+            tables.insert(entry.table_id, table);
+            table_names.insert(entry.table_name.clone(), entry.table_id);
         }
-        let cat_table = Table::open(TableId(0), "catalog", &get_catalog_schema());
+        let cat_table = Table::open(TableId(0), FileId(0), "catalog", &get_catalog_schema());
         tables.insert(TableId(0), cat_table);
         table_names.insert("catalog".into(), TableId(0));
         Ok(Self {
@@ -85,6 +90,7 @@ impl Database {
     }
 
     fn update_catalog(&mut self, catalog_entry: CatalogEntry) -> DbResult<()> {
+        self.catalog_manager.create_table(&catalog_entry)?;
         let entry_bytes = catalog_entry.to_be_bytes()?;
         tracing::debug!("Encoded cat_entry: {:?}", entry_bytes);
 
@@ -97,20 +103,19 @@ impl Database {
 
     pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<TableId> {
         let path = self.base_path.join(format!("{name}.db"));
-        if let Some(fid) = self.table_names.get(path.to_str().unwrap()) {
+        if let Some(fid) = self.table_names.get(name) {
             return Ok(*fid);
         }
         if path.exists() {
-            let fid = TableId(
-                self.buffer_manager
-                    .storage_manager
-                    .borrow_mut()
-                    .open_or_create_file(path.as_path())?,
-            );
-            self.table_names.insert(String::from(name), fid);
-            let table = Table::open(fid, name, schema);
-            self.tables.insert(fid, table);
-            return Ok(fid);
+            let fid = self
+                .buffer_manager
+                .storage_manager
+                .borrow_mut()
+                .open_or_create_file(path.as_path())?;
+            self.table_names.insert(String::from(name), TableId(fid));
+            let table = Table::open(TableId(fid), FileId(fid), name, schema);
+            self.tables.insert(TableId(fid), table);
+            return Ok(TableId(fid));
         }
         let fid = self
             .buffer_manager
@@ -129,11 +134,9 @@ impl Database {
 
         self.table_names.insert(String::from(name), TableId(fid));
 
-        self.catalog_manager.create_table(name, schema)?;
-
         let table = Table::new(name, schema, &mut self.buffer_manager, fid)?;
         self.tables.insert(TableId(fid), table);
-        Ok(self.tables.get(&TableId(fid)).unwrap().id)
+        Ok(self.tables.get(&TableId(fid)).unwrap().table_id)
     }
 
     pub fn insert_record(&mut self, table_id: TableId, record: &[u8]) -> DbResult<RecordId> {

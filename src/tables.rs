@@ -1,10 +1,10 @@
 use crate::{
     PAGE_SIZE, PageId,
     buffer_pool::BufferPool,
-    database::TableId,
+    database::{FileId, TableId},
     error::{DbError, DbInputError, DbResult},
     page::{
-        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlottedPageMut,
+        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlotArrayEntry, SlottedPageMut,
         fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
     },
     page_header_offsets,
@@ -246,7 +246,7 @@ impl<'a> HeapStorage<'a> {
     fn find_page_with_free_space(&mut self) -> DbResult<u64> {
         let ffp = {
             let fsm = self.bp.get_page(PageId {
-                file_id: self.table.id.0,
+                file_id: self.table.file_id.0,
                 page_num: self.table.current_fsm_idx,
             })?;
 
@@ -260,7 +260,7 @@ impl<'a> HeapStorage<'a> {
 
     fn set_fsm_page_full(&mut self, page_num: u64) -> DbResult<()> {
         let mut fsm = self.bp.get_page(PageId {
-            file_id: self.table.id.0,
+            file_id: self.table.file_id.0,
             page_num: self.table.current_fsm_idx,
         })?;
         let mut fsm_page = fsm.as_fsm_mut()?;
@@ -271,7 +271,7 @@ impl<'a> HeapStorage<'a> {
     fn is_fsm_full(&mut self) -> DbResult<bool> {
         let full = {
             let fsm = self.bp.get_page(PageId {
-                file_id: self.table.id.0,
+                file_id: self.table.file_id.0,
                 page_num: self.table.current_fsm_idx,
             })?;
 
@@ -292,16 +292,28 @@ impl<'a> HeapStorage<'a> {
 
     fn handle_full_fsm(&mut self) -> DbResult<()> {
         tracing::warn!("FSM full!");
+        let next_fsm_num = {
+            let old_fsm = self.bp.get_page(PageId {
+                file_id: self.table.file_id.0,
+                page_num: self.table.current_fsm_idx,
+            })?;
+            let old = old_fsm.as_fsm()?;
+            old.fsm_num() + 1
+        };
+
         let new_fsm_num = {
             let mut new_fsm_page = self
                 .bp
-                .create_page(self.table.id.0, PageKind::FreeSpaceMap)?;
-            let new_fsm = new_fsm_page.as_fsm_mut()?;
-            new_fsm.header().page_id()
+                .create_page(self.table.file_id.0, PageKind::FreeSpaceMap)?;
+            let mut new_fsm = new_fsm_page.as_fsm_mut()?;
+            let id = new_fsm.header().page_id();
+            new_fsm.set_fsm_num(next_fsm_num);
+            new_fsm.set_page_full(id);
+            id
         };
 
         let mut old_fsm = self.bp.get_page(PageId {
-            file_id: self.table.id.0,
+            file_id: self.table.file_id.0,
             page_num: self.table.current_fsm_idx,
         })?;
         let mut old_fsm_page = old_fsm.as_fsm_mut()?;
@@ -315,22 +327,22 @@ impl<'a> HeapStorage<'a> {
         Ok(())
     }
 
-    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> DbResult<Option<RecordId>> {
+    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> DbResult<RecordId> {
         let mut page = if let Ok(page) = self.bp.get_page(PageId {
-            file_id: self.table.id.0,
+            file_id: self.table.file_id.0,
             page_num,
         }) {
             page
         } else {
-            self.bp.create_page(self.table.id.0, PageKind::Heap)?
+            self.bp.create_page(self.table.table_id.0, PageKind::Heap)?
         };
 
         let rid = page.with_heap_mut(|heap| match heap.insert(record) {
-            Ok(slot) => Ok(Some(RecordId {
-                page: page_num,
+            Ok(slot) => Ok(RecordId {
+                page: slot.page,
                 slot: slot.slot,
-            })),
-            Err(_) => Ok(None),
+            }),
+            Err(e) => Err(e),
         })?;
 
         Ok(rid)
@@ -346,7 +358,7 @@ impl<'a> HeapStorage<'a> {
                 self.handle_full_fsm()?;
             }
             // Make a new one.
-            let new_page = self.bp.create_page(self.table.id.0, PageKind::Heap)?;
+            let new_page = self.bp.create_page(self.table.file_id.0, PageKind::Heap)?;
             pnum = new_page.page_id.page_num;
             tracing::warn!("Created page {pnum}");
         }
@@ -358,31 +370,27 @@ impl<'a> HeapStorage<'a> {
     }
 
     pub fn insert_record(&mut self, record: &[u8]) -> DbResult<RecordId> {
-        if record.len() >= PAGE_SIZE - page_header_offsets::SIZE {
+        if record.len()
+            > PAGE_SIZE - page_header_offsets::SIZE - std::mem::size_of::<SlotArrayEntry>()
+        {
             return Err(DbError::InputError(DbInputError::RecordTooLarge));
         }
-        tracing::debug!("Inserting record: {:?}", record);
 
-        // Try cached page.
         if let Some(page_num) = self.table.current_heap_page {
-            match self.try_insert_into_page(page_num, record)? {
-                Some(rid) => return Ok(rid),
-                None => {
-                    self.handle_full_page(page_num)?;
-                }
+            match self.try_insert_into_page(page_num, record) {
+                Ok(rid) => return Ok(rid),
+                Err(DbError::PageFull) => self.handle_full_page(page_num)?,
+                Err(e) => return Err(e),
             }
         }
 
-        let mut free_page = self.find_insert_page()?;
-
-        // Try to insert there, retrying if needed.
         loop {
-            match self.try_insert_into_page(free_page, record)? {
-                Some(rid) => return Ok(rid),
-                None => {
-                    self.handle_full_page(free_page)?;
-                    free_page = self.find_insert_page()?;
-                }
+            let free_page = self.find_insert_page()?;
+
+            match self.try_insert_into_page(free_page, record) {
+                Ok(rid) => return Ok(rid),
+                Err(DbError::PageFull) => self.handle_full_page(free_page)?,
+                Err(e) => return Err(e),
             }
         }
     }
@@ -391,7 +399,8 @@ impl<'a> HeapStorage<'a> {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Table {
-    pub id: TableId,
+    pub table_id: TableId,
+    pub file_id: FileId,
     name: String,
     schema: TableSchema,
     current_fsm_idx: u64,
@@ -447,7 +456,8 @@ impl Table {
 
         Ok(Self {
             name: name.to_string(),
-            id: TableId(file_id),
+            table_id: TableId(file_id),
+            file_id: FileId(file_id),
             schema: schema.clone(),
             current_fsm_idx: FIRST_FSM_PAGE,
             last_known_free_page: 2,
@@ -455,9 +465,10 @@ impl Table {
         })
     }
 
-    pub fn open(id: TableId, name: &str, schema: &TableSchema) -> Self {
+    pub fn open(table_id: TableId, file_id: FileId, name: &str, schema: &TableSchema) -> Self {
         Self {
-            id,
+            table_id,
+            file_id,
             name: name.to_string(),
             schema: schema.clone(),
             current_fsm_idx: FIRST_FSM_PAGE,
