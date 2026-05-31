@@ -1,16 +1,28 @@
 use std::cell::{Ref, RefMut};
 use std::ops::{Deref, DerefMut};
 
+use crate::error::{DbError, DbInputError, DbResult};
 use crate::{INITIAL_FIRST_FREE_PAGE_NUMBER, PageGuard};
-use crate::{
-    PAGE_SIZE,
-    error::{DbError, DbInputError, DbResult},
-    page_header_offsets,
-};
 
 pub mod catalog;
 pub mod fsm;
 pub mod heap;
+
+pub(crate) mod page_header_offsets {
+    pub const ID: usize = 0;
+    pub const KIND: usize = 8;
+    pub const ENTRIES: usize = 9;
+    pub const NEXT_PAGE: usize = 11;
+    pub const SIZE: usize = 19;
+    pub(crate) mod header_page {
+        pub const FIRST_FREE_PAGE_ID: usize = 19;
+    }
+    pub(crate) mod fsm_page {
+        pub const FSM_NUM: usize = 21;
+        pub const SIZE: usize = 23;
+    }
+}
+pub(crate) const PAGE_SIZE: usize = 4096;
 
 pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
     let mut data = [0u8; PAGE_SIZE];
@@ -33,7 +45,7 @@ pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
 
 impl PageGuard<'_> {
     fn cast_read(&self, expected: PageKind) -> DbResult<Page<Ref<'_, [u8; PAGE_SIZE]>>> {
-        let data = self.frame.data.borrow();
+        let data = self.borrow_data();
         let page = Page { data };
         if page.header().kind() != expected {
             tracing::error!(
@@ -48,8 +60,7 @@ impl PageGuard<'_> {
         Ok(page)
     }
     fn cast_write(&mut self, expected: PageKind) -> DbResult<Page<RefMut<'_, [u8; PAGE_SIZE]>>> {
-        self.frame.mark_dirty();
-        let data = self.frame.data.borrow_mut();
+        let data = self.borrow_data_mut();
         let page = Page { data };
         if page.header().kind() != expected {
             tracing::error!(
@@ -87,7 +98,7 @@ pub trait PageAccessorMut: PageAccessor {
 
 pub trait SlottedPage: PageAccessor {
     fn get_slot_array_entry(&self, index: u16) -> DbResult<Option<SlotArrayEntry>> {
-        if index >= self.header().num_entries() {
+        if index >= self.num_entries() {
             return Err(DbError::InputError(DbInputError::OutOfBounds));
         }
         let offset = page_header_offsets::SIZE + size_of::<SlotArrayEntry>() * index as usize;
@@ -99,15 +110,15 @@ pub trait SlottedPage: PageAccessor {
         }))
     }
     fn get_freespace_start(&self) -> DbResult<u16> {
-        if self.header().num_entries() == 0 {
+        if self.num_entries() == 0 {
             Ok(u16::try_from(page_header_offsets::SIZE)?)
         } else {
             Ok(u16::try_from(page_header_offsets::SIZE)?
-                + u16::try_from(size_of::<SlotArrayEntry>())? * self.header().num_entries())
+                + u16::try_from(size_of::<SlotArrayEntry>())? * self.num_entries())
         }
     }
     fn get_slot(&self, slot_index: u16) -> DbResult<Option<&[u8]>> {
-        if slot_index >= self.header().num_entries() {
+        if slot_index >= self.num_entries() {
             return Ok(None);
         }
         let sa_offset =
@@ -118,13 +129,17 @@ pub trait SlottedPage: PageAccessor {
             &self.data()[data_offset as usize..(data_offset + data_size) as usize],
         ))
     }
+
+    fn num_entries(&self) -> u16 {
+        self.header().num_entries()
+    }
 }
 
 pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
     fn insert(&mut self, data: &[u8]) -> DbResult<PageEntryId> {
         tracing::debug!("Inserting: ({:?})", data);
         let size = data.len();
-        let num_entries = self.header().num_entries();
+        let num_entries = self.num_entries();
         let freespace_start = self.get_freespace_start()?;
         let new_freespace_start = freespace_start + u16::try_from(size_of::<SlotArrayEntry>())?;
         let offset = if num_entries > 0 {
@@ -266,7 +281,7 @@ impl PageHeaderMut<'_> {
 
 #[derive(Debug)]
 pub struct Page<G> {
-    data: G,
+    pub data: G,
 }
 
 impl<G> PageAccessor for Page<G>

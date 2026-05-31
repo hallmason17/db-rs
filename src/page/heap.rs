@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    PAGE_SIZE, PageGuard,
+    PageGuard,
     error::DbResult,
-    page::{PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
+    page::{PAGE_SIZE, PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
 };
 
 use super::PageKind;
@@ -54,6 +54,13 @@ impl PageGuard<'_> {
     ) -> DbResult<T> {
         let page = self.cast_write(PageKind::Heap)?;
         f(&mut HeapMut { data: page.data })
+    }
+    pub fn with_heap<T>(
+        &self,
+        f: impl FnOnce(&Heap<Ref<'_, [u8; PAGE_SIZE]>>) -> DbResult<T>,
+    ) -> DbResult<T> {
+        let page = self.cast_read(PageKind::Heap)?;
+        f(&Heap { data: page.data })
     }
     pub fn as_heap(&self) -> DbResult<Heap<Ref<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_read(PageKind::Heap)?;

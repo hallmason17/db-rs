@@ -1,13 +1,14 @@
 use crate::{
-    PAGE_SIZE, PageId,
+    PageId,
     buffer_pool::BufferPool,
-    database::{FileId, TableId},
     error::{DbError, DbInputError, DbResult},
+    ids::{FileId, TableId},
     page::{
-        PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlotArrayEntry, SlottedPageMut,
+        PAGE_SIZE, PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlotArrayEntry,
+        SlottedPageMut,
         fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
+        page_header_offsets,
     },
-    page_header_offsets,
     value::{DataType, Value},
 };
 
@@ -246,7 +247,7 @@ impl<'a> HeapStorage<'a> {
     fn find_page_with_free_space(&mut self) -> DbResult<u64> {
         let ffp = {
             let fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id.0,
+                file_id: self.table.file_id,
                 page_num: self.table.current_fsm_idx,
             })?;
 
@@ -260,7 +261,7 @@ impl<'a> HeapStorage<'a> {
 
     fn set_fsm_page_full(&mut self, page_num: u64) -> DbResult<()> {
         let mut fsm = self.bp.get_page(PageId {
-            file_id: self.table.file_id.0,
+            file_id: self.table.file_id,
             page_num: self.table.current_fsm_idx,
         })?;
         let mut fsm_page = fsm.as_fsm_mut()?;
@@ -271,7 +272,7 @@ impl<'a> HeapStorage<'a> {
     fn is_fsm_full(&mut self) -> DbResult<bool> {
         let full = {
             let fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id.0,
+                file_id: self.table.file_id,
                 page_num: self.table.current_fsm_idx,
             })?;
 
@@ -294,7 +295,7 @@ impl<'a> HeapStorage<'a> {
         tracing::warn!("FSM full!");
         let next_fsm_num = {
             let old_fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id.0,
+                file_id: self.table.file_id,
                 page_num: self.table.current_fsm_idx,
             })?;
             let old = old_fsm.as_fsm()?;
@@ -304,7 +305,7 @@ impl<'a> HeapStorage<'a> {
         let new_fsm_num = {
             let mut new_fsm_page = self
                 .bp
-                .create_page(self.table.file_id.0, PageKind::FreeSpaceMap)?;
+                .create_page(self.table.file_id, PageKind::FreeSpaceMap)?;
             let mut new_fsm = new_fsm_page.as_fsm_mut()?;
             let id = new_fsm.header().page_id();
             new_fsm.set_fsm_num(next_fsm_num);
@@ -313,7 +314,7 @@ impl<'a> HeapStorage<'a> {
         };
 
         let mut old_fsm = self.bp.get_page(PageId {
-            file_id: self.table.file_id.0,
+            file_id: self.table.file_id,
             page_num: self.table.current_fsm_idx,
         })?;
         let mut old_fsm_page = old_fsm.as_fsm_mut()?;
@@ -329,12 +330,12 @@ impl<'a> HeapStorage<'a> {
 
     fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> DbResult<RecordId> {
         let mut page = if let Ok(page) = self.bp.get_page(PageId {
-            file_id: self.table.file_id.0,
+            file_id: self.table.file_id,
             page_num,
         }) {
             page
         } else {
-            self.bp.create_page(self.table.table_id.0, PageKind::Heap)?
+            self.bp.create_page(self.table.file_id, PageKind::Heap)?
         };
 
         let rid = page.with_heap_mut(|heap| match heap.insert(record) {
@@ -358,7 +359,7 @@ impl<'a> HeapStorage<'a> {
                 self.handle_full_fsm()?;
             }
             // Make a new one.
-            let new_page = self.bp.create_page(self.table.file_id.0, PageKind::Heap)?;
+            let new_page = self.bp.create_page(self.table.file_id, PageKind::Heap)?;
             pnum = new_page.page_id.page_num;
             tracing::warn!("Created page {pnum}");
         }
@@ -412,7 +413,7 @@ impl Table {
         name: &str,
         schema: &TableSchema,
         bp: &mut BufferPool,
-        file_id: u32,
+        file_id: FileId,
     ) -> DbResult<Self> {
         // 2. Initialize the page file.
         // 2.1 Catalog file initialization (write schema).
@@ -456,8 +457,8 @@ impl Table {
 
         Ok(Self {
             name: name.to_string(),
-            table_id: TableId(file_id),
-            file_id: FileId(file_id),
+            table_id: TableId(file_id.0),
+            file_id,
             schema: schema.clone(),
             current_fsm_idx: FIRST_FSM_PAGE,
             last_known_free_page: 2,

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
-    database::TableId,
     error::DbResult,
+    ids::TableId,
     page::{PageAccessor, PageHeaderReader, SlottedPageMut},
     tables::TableSchema,
 };

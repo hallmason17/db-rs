@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    PAGE_SIZE, PageGuard,
+    PageGuard,
     error::DbResult,
-    page::{PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
+    page::{PAGE_SIZE, PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
 };
 
 use super::PageKind;

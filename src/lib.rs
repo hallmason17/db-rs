@@ -1,36 +1,27 @@
-use std::cell::RefCell;
-
 pub mod buffer_pool;
 pub mod catalog;
 pub mod database;
 pub mod error;
+pub mod executor;
 pub mod expr;
+pub mod ids;
 pub mod page;
+pub mod plan;
 pub mod storage;
 pub mod tables;
+pub mod transaction;
 pub mod value;
 
-pub(crate) mod page_header_offsets {
-    pub const ID: usize = 0;
-    pub const KIND: usize = 8;
-    pub const ENTRIES: usize = 9;
-    pub const NEXT_PAGE: usize = 11;
-    pub const SIZE: usize = 19;
-    pub(crate) mod header_page {
-        pub const FIRST_FREE_PAGE_ID: usize = 19;
-    }
-    pub(crate) mod fsm_page {
-        pub const FSM_NUM: usize = 21;
-        pub const SIZE: usize = 23;
-    }
-}
-pub(crate) const PAGE_SIZE: usize = 4096;
+pub use buffer_pool::PageGuard;
+
+use crate::ids::{FileId, PageId};
+
 pub(crate) const MAGIC_NUMBER: u64 = 0xDBDB_DBDB;
 pub(crate) const CATALOG_PAGE_ID: PageId = PageId {
-    file_id: 0,
+    file_id: FileId(0),
     page_num: 0,
 };
-pub(crate) const INITIAL_FIRST_FREE_PAGE_NUMBER: usize = 2;
+pub(crate) const INITIAL_FIRST_FREE_PAGE_NUMBER: u64 = 2;
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
@@ -55,67 +46,5 @@ impl PageFileFooter {
         bytes[0..8].copy_from_slice(&self.magic_number.to_be_bytes());
         bytes[8..16].copy_from_slice(&self.num_pages.to_be_bytes());
         bytes
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct PageId {
-    pub file_id: u32,
-    pub page_num: u64,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct Frame {
-    data: RefCell<[u8; PAGE_SIZE]>,
-    pub state: RefCell<FrameState>,
-}
-#[derive(Debug)]
-pub struct FrameState {
-    pub page_id: Option<PageId>,
-    pub pin_count: i32,
-    pub clock_flag: bool,
-    pub dirty: bool,
-}
-impl Frame {
-    pub fn mark_dirty(&self) {
-        self.state.borrow_mut().dirty = true;
-    }
-    pub fn unpin(&self) {
-        let mut state = self.state.borrow_mut();
-        state.pin_count -= 1;
-        tracing::trace!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
-    }
-    pub fn pin(&self) {
-        let mut state = self.state.borrow_mut();
-        state.pin_count += 1;
-        state.clock_flag = true;
-        tracing::trace!("pin page: {:?} -> {}", state.page_id, state.pin_count);
-    }
-}
-impl Default for Frame {
-    fn default() -> Self {
-        let buf = RefCell::new([0u8; PAGE_SIZE]);
-        Self {
-            data: buf,
-            state: RefCell::new(FrameState {
-                page_id: None,
-                pin_count: 0,
-                clock_flag: false,
-                dirty: false,
-            }),
-        }
-    }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct PageGuard<'pg> {
-    page_id: PageId,
-    frame: &'pg Frame,
-}
-impl Drop for PageGuard<'_> {
-    fn drop(&mut self) {
-        self.frame.unpin();
     }
 }

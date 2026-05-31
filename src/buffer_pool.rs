@@ -1,10 +1,15 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::{Ref, RefCell, RefMut},
+    collections::HashMap,
+};
 
 use crate::{
-    Frame, PageGuard, PageId,
     error::{DbError, DbResult},
-    page::{PageHeaderMut, PageKind},
-    page_header_offsets,
+    ids::{FileId, PageId},
+    page::{
+        PAGE_SIZE, Page, PageAccessor, PageHeaderMut, PageHeaderReader, PageKind,
+        page_header_offsets,
+    },
     storage::StorageManager,
 };
 
@@ -15,6 +20,77 @@ pub enum ReplacementStrategy {
     Clock,
     Lru(u32),
     Lfu,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct Frame {
+    pub(crate) data: RefCell<[u8; PAGE_SIZE]>,
+    pub state: RefCell<FrameState>,
+}
+#[derive(Debug)]
+pub struct FrameState {
+    pub page_id: Option<PageId>,
+    pub pin_count: i32,
+    pub clock_flag: bool,
+    pub dirty: bool,
+}
+impl Frame {
+    pub fn mark_dirty(&self) {
+        self.state.borrow_mut().dirty = true;
+    }
+    pub fn unpin(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pin_count -= 1;
+        tracing::trace!("unpin page: {:?} -> {}", state.page_id, state.pin_count);
+    }
+    pub fn pin(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pin_count += 1;
+        state.clock_flag = true;
+        tracing::trace!("pin page: {:?} -> {}", state.page_id, state.pin_count);
+    }
+}
+impl Default for Frame {
+    fn default() -> Self {
+        let buf = RefCell::new([0u8; PAGE_SIZE]);
+        Self {
+            data: buf,
+            state: RefCell::new(FrameState {
+                page_id: None,
+                pin_count: 0,
+                clock_flag: false,
+                dirty: false,
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct PageGuard<'pg> {
+    pub page_id: PageId,
+    frame: &'pg Frame,
+}
+impl PageGuard<'_> {
+    pub(crate) fn borrow_data(&self) -> Ref<'_, [u8; PAGE_SIZE]> {
+        self.frame.data.borrow()
+    }
+    pub(crate) fn borrow_data_mut(&self) -> RefMut<'_, [u8; PAGE_SIZE]> {
+        self.frame.mark_dirty();
+        self.frame.data.borrow_mut()
+    }
+    pub fn kind(&self) -> PageKind {
+        let page = Page {
+            data: self.frame.data.borrow(),
+        };
+        page.header().kind()
+    }
+}
+impl Drop for PageGuard<'_> {
+    fn drop(&mut self) {
+        self.frame.unpin();
+    }
 }
 
 pub type FrameNum = u64;
@@ -158,7 +234,7 @@ impl BufferPool {
         }
     }
 
-    pub fn create_page(&self, file_id: u32, kind: PageKind) -> DbResult<PageGuard<'_>> {
+    pub fn create_page(&self, file_id: FileId, kind: PageKind) -> DbResult<PageGuard<'_>> {
         if let Some(frame_index) = self.select_victim() {
             let page_num = self
                 .storage_manager
@@ -236,7 +312,7 @@ mod tests {
     fn create_page_pins_and_appears_in_page_table() {
         let (_dir, bp) = setup(4);
         let pnum = {
-            let guard = bp.create_page(0, PageKind::Heap).unwrap();
+            let guard = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             guard.page_id
         };
         assert_eq!(bp.page_table.borrow().len(), 1);
@@ -248,10 +324,10 @@ mod tests {
         let (_dir, bp) = setup(2);
 
         let (p1, p2) = {
-            let g1 = bp.create_page(0, PageKind::Heap).unwrap();
+            let g1 = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             let p1 = g1.page_id;
             drop(g1);
-            let g2 = bp.create_page(0, PageKind::Heap).unwrap();
+            let g2 = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             let p2 = g2.page_id;
             drop(g2);
             (p1, p2)
@@ -264,7 +340,7 @@ mod tests {
         );
 
         let p3 = {
-            let g3 = bp.create_page(0, PageKind::Heap).unwrap();
+            let g3 = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             g3.page_id
         };
 
@@ -288,7 +364,7 @@ mod tests {
     fn multiple_pins_same_page_via_cache_hit() {
         let (_dir, bp) = setup(4);
         let p1 = {
-            let g = bp.create_page(0, PageKind::Heap).unwrap();
+            let g = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             g.page_id
         };
 
@@ -312,7 +388,7 @@ mod tests {
         let (_dir, bp) = setup(4);
 
         let p1 = {
-            let guard = bp.create_page(0, PageKind::Heap).unwrap();
+            let guard = bp.create_page(FileId(0), PageKind::Heap).unwrap();
             let p1 = guard.page_id;
             guard.frame.data.borrow_mut()[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
             guard.frame.mark_dirty();

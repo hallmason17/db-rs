@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt,
     path::{Path, PathBuf},
 };
 
@@ -8,6 +9,7 @@ use crate::{
     buffer_pool::BufferPool,
     catalog::{Catalog, CatalogEntry, CatalogManager},
     error::DbResult,
+    ids::{FileId, TableId},
     page::SlottedPageMut,
     storage::StorageManager,
     tables::{ColumnDefinition, RecordId, Table, TableSchema},
@@ -39,17 +41,18 @@ fn get_catalog_schema() -> TableSchema {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone)]
-pub struct FileId(pub u32);
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone)]
-pub struct TableId(pub u32);
+impl fmt::Display for FileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug)]
 pub struct Database {
-    buffer_manager: BufferPool,
-    catalog_manager: CatalogManager,
-    tables: HashMap<TableId, Table>,
-    table_names: HashMap<String, TableId>,
+    pub buffer_manager: BufferPool,
+    pub catalog_manager: CatalogManager,
+    pub tables: HashMap<TableId, Table>,
+    pub table_names: HashMap<String, TableId>,
     base_path: PathBuf,
 }
 impl Database {
@@ -68,12 +71,7 @@ impl Database {
                 .storage_manager
                 .borrow_mut()
                 .open_or_create_file(&base_path.join(Path::new(&entry.file_name)))?;
-            let table = Table::open(
-                entry.table_id,
-                FileId(file_id),
-                &entry.table_name,
-                &entry.schema,
-            );
+            let table = Table::open(entry.table_id, file_id, &entry.table_name, &entry.schema);
             tables.insert(entry.table_id, table);
             table_names.insert(entry.table_name.clone(), entry.table_id);
         }
@@ -112,10 +110,10 @@ impl Database {
                 .storage_manager
                 .borrow_mut()
                 .open_or_create_file(path.as_path())?;
-            self.table_names.insert(String::from(name), TableId(fid));
-            let table = Table::open(TableId(fid), FileId(fid), name, schema);
-            self.tables.insert(TableId(fid), table);
-            return Ok(TableId(fid));
+            self.table_names.insert(String::from(name), TableId(fid.0));
+            let table = Table::open(TableId(fid.0), fid, name, schema);
+            self.tables.insert(TableId(fid.0), table);
+            return Ok(TableId(fid.0));
         }
         let fid = self
             .buffer_manager
@@ -124,7 +122,7 @@ impl Database {
             .open_or_create_file(path.as_path())?;
 
         let catalog_entry = CatalogEntry {
-            table_id: TableId(fid),
+            table_id: TableId(fid.0),
             table_name: name.to_string(),
             file_name: format!("{name}.db"),
             schema: schema.clone(),
@@ -132,11 +130,11 @@ impl Database {
 
         self.update_catalog(catalog_entry)?;
 
-        self.table_names.insert(String::from(name), TableId(fid));
+        self.table_names.insert(String::from(name), TableId(fid.0));
 
         let table = Table::new(name, schema, &mut self.buffer_manager, fid)?;
-        self.tables.insert(TableId(fid), table);
-        Ok(self.tables.get(&TableId(fid)).unwrap().table_id)
+        self.tables.insert(TableId(fid.0), table);
+        Ok(self.tables.get(&TableId(fid.0)).unwrap().table_id)
     }
 
     pub fn insert_record(&mut self, table_id: TableId, record: &[u8]) -> DbResult<RecordId> {
