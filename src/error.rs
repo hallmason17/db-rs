@@ -1,4 +1,4 @@
-use std::{array::TryFromSliceError, num::TryFromIntError};
+use std::{array::TryFromSliceError, num::TryFromIntError, string::FromUtf8Error};
 
 use thiserror::Error;
 
@@ -42,6 +42,9 @@ pub enum DbError {
 
     #[error("invalid comparison")]
     InvalidComparison(String),
+
+    #[error("couldn't convert from utf8")]
+    Utf8Conversion(#[from] FromUtf8Error),
 
     #[error("unknown error")]
     Unknown,

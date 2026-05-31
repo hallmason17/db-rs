@@ -21,10 +21,11 @@ pub struct RecordId {
 
 #[allow(dead_code)]
 pub struct Record {
-    rid: RecordId,
-    data: Vec<u8>,
+    pub rid: RecordId,
+    pub data: Vec<u8>,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tuple {
     pub values: Vec<Value>,
 }
@@ -35,8 +36,11 @@ impl Tuple {
         }
     }
 
-    fn calc_header_size(&self) -> usize {
+    pub fn header_size(&self) -> usize {
         let mut size = 0;
+
+        // Null bitmap size
+        size += self.values.len().div_ceil(8);
         for value in &self.values {
             match value {
                 // (offset as u16, len as u16)
@@ -70,7 +74,7 @@ impl Tuple {
         let mut header_bytes = Vec::new();
         let mut variable_bytes = Vec::new();
 
-        let mut variable_byte_offset = self.calc_header_size();
+        let mut variable_byte_offset = self.header_size();
 
         let null_bitmap = self.gen_null_bitmap();
         header_bytes.extend_from_slice(&null_bitmap);
@@ -116,6 +120,57 @@ impl Tuple {
 
         header_bytes.extend(&variable_bytes);
         header_bytes
+    }
+
+    pub fn deserialize(bytes: &[u8], schema: &TableSchema) -> DbResult<Self> {
+        let mut values = Vec::with_capacity(schema.attributes.len());
+        let bitmap_size = schema.attributes.len().div_ceil(8);
+        let mut bitmap = Vec::new();
+        bitmap.extend_from_slice(bytes[0..bitmap_size].into());
+        let mut pos = bitmap_size;
+        for attr in &schema.attributes {
+            match attr.data_type {
+                DataType::Int => {
+                    values.push(Value::Int(i32::from_be_bytes(
+                        bytes[pos..pos + 4].try_into().unwrap(),
+                    )));
+                    pos += 4;
+                }
+                DataType::Float => {
+                    values.push(Value::Float(f32::from_be_bytes(
+                        bytes[pos..pos + 4].try_into().unwrap(),
+                    )));
+                    pos += 4;
+                }
+                DataType::Boolean => {
+                    values.push(Value::Boolean(bytes[pos] == 1));
+                    pos += 1;
+                }
+                DataType::VarChar => {
+                    let offset =
+                        u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    pos += 2;
+                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    pos += 2;
+                    values.push(Value::VarChar(String::from_utf8(
+                        bytes[offset..offset + size].to_vec(),
+                    )?));
+                }
+                DataType::Blob => {
+                    let offset =
+                        u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    pos += 2;
+                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    pos += 2;
+                    values.push(Value::Blob(bytes[offset..offset + size].to_vec()));
+                }
+            }
+        }
+        Ok(Self { values })
+    }
+
+    pub fn from_record(record: &Record, schema: &TableSchema) -> DbResult<Self> {
+        Self::deserialize(&record.data, schema)
     }
 }
 
@@ -398,12 +453,12 @@ impl<'a> HeapStorage<'a> {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Table {
     pub table_id: TableId,
     pub file_id: FileId,
-    name: String,
-    schema: TableSchema,
+    pub name: String,
+    pub schema: TableSchema,
     current_fsm_idx: u64,
     last_known_free_page: u64,
     current_heap_page: Option<u64>,
@@ -538,6 +593,73 @@ mod tests {
         // null bitmap (1) + offset (2) + len (2) + data (5) = 10 bytes
         assert_eq!(bytes.len(), 10);
         assert_eq!(&bytes[5..10], b"hello");
+    }
+
+    #[test]
+    fn tuple_serialize_mixed() {
+        let attrs = vec![
+            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+        ];
+        let schema = TableSchema::new(&attrs);
+        let tuple = Tuple::new(&[
+            Value::Int(1),
+            Value::VarChar("hello".into()),
+            Value::Float(5.0),
+            Value::Boolean(true),
+        ]);
+        let bytes = tuple.serialize(&schema);
+        let header_size = tuple.header_size() as u16;
+
+        assert_eq!(bytes.len(), header_size as usize + "hello".len());
+        assert_eq!(bytes[0], 0b0000_0000);
+        assert_eq!(&bytes[1..5], &1i32.to_be_bytes());
+        assert_eq!(&bytes[5..7], header_size.to_be_bytes());
+        assert_eq!(&bytes[7..9], ("hello".len() as u16).to_be_bytes());
+        assert_eq!(&bytes[9..13], &5.0f32.to_be_bytes());
+        assert_eq!(&bytes[14..19], "hello".as_bytes());
+    }
+
+    #[test]
+    fn tuple_deserialize_int() {
+        let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
+        let schema = TableSchema::new(&[col]);
+        let tuple = Tuple::new(&[Value::Int(42)]);
+        let bytes = tuple.serialize(&schema);
+        let des_tuple = Tuple::deserialize(&bytes, &schema).unwrap();
+        assert_eq!(tuple, des_tuple);
+    }
+
+    #[test]
+    fn tuple_deserialize_varchar() {
+        let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
+        let schema = TableSchema::new(&[col]);
+        let tuple = Tuple::new(&[Value::VarChar("hello".into())]);
+        let bytes = tuple.serialize(&schema);
+        let des_tuple = Tuple::deserialize(&bytes, &schema).unwrap();
+        assert_eq!(tuple, des_tuple);
+    }
+
+    #[test]
+    fn tuple_deserialize_mixed() {
+        let attrs = vec![
+            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+        ];
+        let schema = TableSchema::new(&attrs);
+        let tuple = Tuple::new(&[
+            Value::Int(1),
+            Value::VarChar("hello".into()),
+            Value::Float(5.0),
+            Value::Boolean(true),
+        ]);
+        let bytes = tuple.serialize(&schema);
+        let des_tuple = Tuple::deserialize(&bytes, &schema).unwrap();
+        assert_eq!(tuple, des_tuple);
     }
 
     #[test]
