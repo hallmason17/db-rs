@@ -26,8 +26,4 @@ cargo run
 cargo bench
 ```
 
-## AI Use
-I am using this project to learn more about Rust and database engines. I use AI
-as a learning tool to ask questions and get design feedback.
-
 
