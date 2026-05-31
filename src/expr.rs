@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use crate::{
     error::{DbError, DbResult},
+    tables::Tuple,
     value::Value,
 };
 
@@ -11,7 +12,8 @@ pub enum Expr {
     Constant(Value),
     Equal(Box<Expr>, Box<Expr>),
     GreaterThan(Box<Expr>, Box<Expr>),
-    Is(Box<Expr>, Value),
+    IsNull(Box<Expr>),
+    IsNotNull(Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Like(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
@@ -27,8 +29,8 @@ impl Display for Expr {
             Self::GreaterThan(l, r) => write!(f, "{l} > {r}"),
             Self::LessThan(l, r) => write!(f, "{l} < {r}"),
             Self::Like(l, r) => write!(f, "{l} LIKE {r}"),
-            Self::Is(l, Value::Null) => write!(f, "{l} IS NULL"),
-            Self::Is(_, _) => panic!("invalid IS"),
+            Self::IsNull(l) => write!(f, "{l} IS NULL"),
+            Self::IsNotNull(l) => write!(f, "{l} IS NOT NULL"),
             Self::Or(l, r) => write!(f, "{l} OR {r}"),
             Self::Not(e) => write!(f, "NOT {e}"),
         }
@@ -36,7 +38,7 @@ impl Display for Expr {
 }
 
 impl Expr {
-    pub fn evaluate(&self, tuple: Option<&[Value]>) -> DbResult<Value> {
+    pub fn evaluate(&self, tuple: Option<&Tuple>) -> DbResult<Value> {
         use Value::*;
         match self {
             Self::And(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
@@ -54,7 +56,7 @@ impl Expr {
                     "cannot eval '{l} AND {r}'"
                 ))),
             },
-            Self::AttrRef(r) => Ok(tuple.and_then(|t| t.get(*r)).cloned().unwrap()),
+            Self::AttrRef(r) => Ok(tuple.and_then(|t| t.values.get(*r)).cloned().unwrap()),
             Self::Constant(c) => Ok(c.clone()),
             Self::Equal(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
                 (Boolean(l), Boolean(r)) => Ok(Boolean(l == r)),
@@ -115,15 +117,22 @@ impl Expr {
                 Null => Ok(Null),
                 _ => Err(DbError::InvalidComparison(format!("cannot eval 'NOT {r}'"))),
             },
+            Self::IsNull(r) => match r.evaluate(tuple)? {
+                Null => Ok(Boolean(true)),
+                Boolean(_) | Int(_) | Float(_) | Blob(_) | VarChar(_) => Ok(Boolean(false)),
+            },
+            Self::IsNotNull(r) => match r.evaluate(tuple)? {
+                Null => Ok(Boolean(false)),
+                Boolean(_) | Int(_) | Float(_) | Blob(_) | VarChar(_) => Ok(Boolean(true)),
+            },
             Self::Like(_l, _r) => todo!(),
-            Self::Is(_l, _r) => todo!(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{expr::Expr, value::Value};
+    use crate::{expr::Expr, tables::Tuple, value::Value};
 
     #[test]
     fn eq_constants() {
@@ -208,7 +217,7 @@ mod tests {
 
     #[test]
     fn basic_and() {
-        let tuple = [Value::Int(1), Value::Int(10)];
+        let tuple = Tuple::new(&[Value::Int(1), Value::Int(10)]);
         let expr = Expr::And(
             Box::new(Expr::Equal(
                 Box::new(Expr::AttrRef(1)),
@@ -253,8 +262,8 @@ mod tests {
             )),
         );
         let tuples = [
-            [Value::Int(1), Value::Int(10)],
-            [Value::Int(2), Value::Int(10)],
+            Tuple::new(&[Value::Int(1), Value::Int(10)]),
+            Tuple::new(&[Value::Int(2), Value::Int(10)]),
         ];
 
         let results = tuples
@@ -276,8 +285,8 @@ mod tests {
             )),
         );
         let tuples = [
-            [Value::Int(1), Value::Int(10)],
-            [Value::Int(2), Value::Int(10)],
+            Tuple::new(&[Value::Int(1), Value::Int(10)]),
+            Tuple::new(&[Value::Int(2), Value::Int(10)]),
         ];
 
         let results = tuples

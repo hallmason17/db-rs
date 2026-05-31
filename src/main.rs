@@ -1,23 +1,28 @@
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
+    executor::Executor,
+    expr::Expr::{self, AttrRef},
+    plan::{PlanNode, QueryPlan},
     storage::StorageManager,
     tables::{ColumnDefinition, TableSchema, Tuple},
+    transaction::Transaction,
     value::{DataType, Value},
 };
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
-    let num_inserts = 100000;
     println!(
-        "Insert demo, inserting {num_inserts} records.
-        Run with RUST_LOG=log_level to see logs.
-        This creates '.db' files in the current directory. Feel free to delete them."
+        "Insert + seq scan demo.
+        Run with RUST_LOG=log_level to see logs."
     );
-    let sm = StorageManager::new(std::env::current_dir().unwrap().as_path()).unwrap();
+
+    let base_path = std::env::current_dir().unwrap();
+
+    let sm = StorageManager::new(base_path.as_path()).unwrap();
     let bp = BufferPool::new(1024, ReplacementStrategy::Clock, sm)?;
-    let mut db = Database::open(std::env::current_dir().unwrap().as_path().into(), bp)?;
+    let mut db = Database::open(base_path.clone(), bp)?;
 
     let attributes = vec![
         ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
@@ -26,19 +31,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let schema = TableSchema::new(&attributes);
 
-    let tuple = Tuple::new(&[
-        Value::Int(1),
-        Value::VarChar("asdf".to_string()),
-        Value::VarChar("asdfasdf@example.com".to_string()),
-    ]);
-
     let table = db.create_table("users", &schema)?;
 
-    let record = tuple.serialize(&schema);
+    let tuples = vec![
+        Tuple::new(&[
+            Value::Int(1),
+            Value::VarChar("mason".to_string()),
+            Value::VarChar("masonh@example.com".to_string()),
+        ]),
+        Tuple::new(&[
+            Value::Int(2),
+            Value::VarChar("janice".to_string()),
+            Value::VarChar("janiceh@example.com".to_string()),
+        ]),
+        Tuple::new(&[
+            Value::Int(3),
+            Value::VarChar("andrew".to_string()),
+            Value::VarChar("andrewh@example.com".to_string()),
+        ]),
+    ];
 
-    for _ in 0..num_inserts {
-        db.insert_record(table, &record)?;
+    for tuple in &tuples {
+        db.insert_record(table, &tuple.serialize(&schema))?;
     }
+
+    let rows = {
+        let table = db.tables.get(&table).unwrap().clone();
+        let txn = Transaction::new(&mut db);
+        let executor = Executor::new(&txn);
+        executor.execute(QueryPlan::Select(PlanNode::SeqScan {
+            table,
+            filter: Some(Expr::GreaterThan(
+                Box::new(AttrRef(0)),
+                Box::new(Expr::Constant(Value::Int(1))),
+            )),
+        }))?
+    };
+
+    println!("Found {} row(s):", rows.len());
+    for row in rows {
+        println!("{row:?}");
+    }
+
+    drop(db);
 
     Ok(())
 }
