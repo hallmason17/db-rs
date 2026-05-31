@@ -12,6 +12,7 @@ impl Executor<'_> {
         Executor { txn }
     }
 
+    #[allow(clippy::collapsible_match)] // shut up clippy i'm not done yet
     pub fn execute(&self, plan: QueryPlan) -> DbResult<Vec<Tuple>> {
         let tuples = match plan {
             QueryPlan::Select(node) => match node {

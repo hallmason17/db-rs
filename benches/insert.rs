@@ -4,7 +4,8 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
-    database::{Database, TableId},
+    database::Database,
+    ids::TableId,
     storage::StorageManager,
     tables::{ColumnDefinition, TableSchema, Tuple},
     value::{DataType, Value},
