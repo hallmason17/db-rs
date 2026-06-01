@@ -23,12 +23,12 @@ pub enum ReplacementStrategy {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Frame {
     pub(crate) data: RefCell<[u8; PAGE_SIZE]>,
     pub state: RefCell<FrameState>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FrameState {
     pub page_id: Option<PageId>,
     pub pin_count: i32,
@@ -111,12 +111,10 @@ impl BufferPool {
         replacement_strategy: ReplacementStrategy,
         storage_manager: StorageManager,
     ) -> DbResult<Self> {
-        let mut frames = vec![];
-        let mut free_frames = vec![];
-        for i in 0..num_pages {
-            frames.push(Frame::default());
-            free_frames.push(usize::try_from(i)?);
-        }
+        let frames = vec![Frame::default(); usize::try_from(num_pages)?];
+        let free_frames = (0..num_pages)
+            .map(usize::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             replacement_strategy,
             frames,
@@ -192,12 +190,10 @@ impl BufferPool {
 
     pub fn get_page(&self, page_id: PageId) -> DbResult<PageGuard<'_>> {
         if let Some(frame_num) = self.find_entry_in_map(page_id) {
-            tracing::trace!("HIT {:?} PAGE TABLE {:?}", page_id, self.page_table);
             let frame = &self.frames[usize::try_from(frame_num)?];
             frame.pin();
             Ok(PageGuard { frame, page_id })
         } else if let Some(frame_index) = self.select_victim() {
-            tracing::warn!("MISS {:?} PAGE TABLE {:?}", page_id, self.page_table);
             self.evict_page(frame_index as FrameNum)?;
             let frame = &self.frames[usize::try_from(frame_index)?];
             {

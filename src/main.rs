@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
@@ -33,35 +35,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = db.create_table("users", &schema)?;
 
-    let tuples = vec![
-        Tuple::new(&[
+    /*
+    let mut tuples = vec![];
+    for i in 0..10000 {
+        let tuple = Tuple::new(&[
             Value::Int(1),
-            Value::VarChar("mason".to_string()),
-            Value::VarChar("masonh@example.com".to_string()),
-        ]),
-        Tuple::new(&[
-            Value::Int(2),
-            Value::VarChar("janice".to_string()),
-            Value::VarChar("janiceh@example.com".to_string()),
-        ]),
-        Tuple::new(&[
-            Value::Int(3),
-            Value::VarChar("andrew".to_string()),
-            Value::VarChar("andrewh@example.com".to_string()),
-        ]),
-    ];
+            Value::VarChar(format!("mason{i}")),
+            Value::VarChar(format!("masonh{i}@example.com")),
+        ]);
+        tuples.push(tuple)
+    }
 
     for tuple in &tuples {
         db.insert_record(table, &tuple.serialize(&schema))?;
     }
+    */
 
+    let start = Instant::now();
     let rows = {
         let table = db.tables.get(&table).unwrap().clone();
         let txn = Transaction::new(&mut db);
         let executor = Executor::new(&txn);
         executor.execute(QueryPlan::Select(PlanNode::SeqScan {
             table,
-            filter: Some(Expr::GreaterThan(
+            filter: Some(Expr::Equal(
                 Box::new(AttrRef(0)),
                 Box::new(Expr::Constant(Value::Int(1))),
             )),
@@ -69,11 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("Found {} row(s):", rows.len());
-    for row in rows {
-        println!("{row:?}");
+    for _row in rows {
+        //println!("{row:?}");
     }
-
-    drop(db);
+    println!("Elapsed: {:?}", start.elapsed());
 
     Ok(())
 }

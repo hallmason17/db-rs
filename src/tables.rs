@@ -125,8 +125,7 @@ impl Tuple {
     pub fn deserialize(bytes: &[u8], schema: &TableSchema) -> DbResult<Self> {
         let mut values = Vec::with_capacity(schema.attributes.len());
         let bitmap_size = schema.attributes.len().div_ceil(8);
-        let mut bitmap = Vec::new();
-        bitmap.extend_from_slice(bytes[0..bitmap_size].into());
+        let _bitmap = &bytes[..bitmap_size];
         let mut pos = bitmap_size;
         for attr in &schema.attributes {
             match attr.data_type {

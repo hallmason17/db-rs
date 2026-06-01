@@ -22,7 +22,7 @@ pub(crate) mod page_header_offsets {
         pub const SIZE: usize = 23;
     }
 }
-pub(crate) const PAGE_SIZE: usize = 4096;
+pub(crate) const PAGE_SIZE: usize = 8192;
 
 pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
     let mut data = [0u8; PAGE_SIZE];
