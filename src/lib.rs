@@ -7,6 +7,7 @@ pub mod expr;
 pub mod ids;
 pub mod page;
 pub mod plan;
+pub mod server;
 pub mod storage;
 pub mod tables;
 pub mod transaction;
