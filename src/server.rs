@@ -9,9 +9,9 @@ use crate::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     storage::StorageManager,
-    transaction::Transaction,
 };
 
+#[allow(dead_code)]
 pub struct DbWorker {
     job_queue: mpsc::Receiver<String>,
     db: Database,
@@ -40,6 +40,7 @@ impl DbWorker {
     }
 }
 
+#[allow(dead_code)]
 pub struct Server {
     job_queue: mpsc::Sender<String>,
     worker_thread: Option<JoinHandle<()>>,

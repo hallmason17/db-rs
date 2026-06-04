@@ -7,7 +7,7 @@ use db_rs::{
     expr::Expr::{self, AttrRef},
     plan::{PlanNode, QueryPlan},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema, Tuple},
+    tables::{ColumnDefinition, TableSchema},
     transaction::Transaction,
     value::{DataType, Value},
 };
