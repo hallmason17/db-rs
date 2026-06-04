@@ -13,6 +13,7 @@ use crate::{
     page::SlottedPageMut,
     storage::StorageManager,
     tables::{ColumnDefinition, RecordId, Table, TableSchema},
+    transaction::Transaction,
     value::DataType,
 };
 
@@ -85,6 +86,10 @@ impl Database {
             table_names,
             base_path,
         })
+    }
+
+    pub fn start_transaction(&'_ mut self) -> Transaction<'_> {
+        Transaction { db: self }
     }
 
     fn update_catalog(&mut self, catalog_entry: CatalogEntry) -> DbResult<()> {

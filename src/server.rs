@@ -1,57 +1,74 @@
 use std::{
+    io::Read,
     net::{TcpListener, TcpStream},
     sync::mpsc,
     thread::JoinHandle,
-    time::Duration,
 };
 
-use crate::database::Database;
+use crate::{
+    buffer_pool::{BufferPool, ReplacementStrategy},
+    database::Database,
+    storage::StorageManager,
+    transaction::Transaction,
+};
 
 pub struct DbWorker {
-    job_queue: mpsc::Receiver<i64>,
-    db: Option<Database>,
+    job_queue: mpsc::Receiver<String>,
+    db: Database,
 }
 impl DbWorker {
-    pub fn new(job_queue: mpsc::Receiver<i64>) -> Self {
-        Self {
+    pub fn new(job_queue: mpsc::Receiver<String>) -> Result<Self, Box<dyn std::error::Error>> {
+        let path = std::env::current_dir()?;
+        Ok(Self {
             job_queue,
-            db: None,
-        }
+            db: Database::open(
+                path.clone(),
+                BufferPool::new(
+                    1024,
+                    ReplacementStrategy::Clock,
+                    StorageManager::new(&path)?,
+                )?,
+            )?,
+        })
     }
 
-    pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let job = self.job_queue.recv()?;
             tracing::info!("Got job: {job:#?}");
-            tracing::info!("{:?}", self.db);
-            std::thread::sleep(Duration::from_millis(100));
         }
     }
 }
 
 pub struct Server {
-    job_queue: mpsc::Sender<i64>,
+    job_queue: mpsc::Sender<String>,
     worker_thread: Option<JoinHandle<()>>,
 }
 
 impl Server {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let (sender, receiver) = mpsc::channel();
         let worker_thread = Some(std::thread::spawn(move || {
-            let dbworker = DbWorker::new(receiver);
+            let mut dbworker = DbWorker::new(receiver).unwrap();
             dbworker.run().unwrap()
         }));
-        Self {
+        Ok(Self {
             job_queue: sender,
             worker_thread,
-        }
+        })
     }
     fn handle_conn(
-        _stream: TcpStream,
-        job_queue: mpsc::Sender<i64>,
+        mut stream: TcpStream,
+        job_queue: mpsc::Sender<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("handle_conn()");
-        job_queue.send(1)?;
+        let mut inputbuf = [0u8; 4096];
+        let bytes = stream.read(&mut inputbuf)?;
+        job_queue.send(
+            String::from_utf8_lossy(&inputbuf[..bytes])
+                .trim()
+                .to_string(),
+        )?;
         tracing::info!("{job_queue:#?}");
         Ok(())
     }
@@ -66,11 +83,5 @@ impl Server {
                 Self::handle_conn(stream, sender).unwrap();
             });
         }
-    }
-}
-
-impl Default for Server {
-    fn default() -> Self {
-        Self::new()
     }
 }

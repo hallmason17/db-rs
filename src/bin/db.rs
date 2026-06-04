@@ -3,7 +3,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
-    let mut server = Server::new();
+    let mut server = Server::new()?;
     server.run()
 }
 
