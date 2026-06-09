@@ -8,7 +8,7 @@ use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
     catalog::{Catalog, CatalogEntry, CatalogManager},
-    error::DbResult,
+    error::Result,
     ids::{FileId, TableId},
     page::SlottedPageMut,
     storage::StorageManager,
@@ -57,13 +57,13 @@ pub struct Database {
     base_path: PathBuf,
 }
 impl Database {
-    pub fn create(base_path: PathBuf, storage_manager: &mut StorageManager) -> DbResult<()> {
+    pub fn create(base_path: PathBuf, storage_manager: &mut StorageManager) -> Result<()> {
         let catalog_path = base_path.join("catalog.db");
         let catalog_path = Path::new(&catalog_path);
         storage_manager.open_or_create_file(catalog_path)?;
         Ok(())
     }
-    pub fn open(base_path: PathBuf, mut buffer_manager: BufferPool) -> DbResult<Self> {
+    pub fn open(base_path: PathBuf, mut buffer_manager: BufferPool) -> Result<Self> {
         let mut tables = HashMap::new();
         let mut table_names = HashMap::new();
         let catalog = CatalogManager::load(&mut buffer_manager)?;
@@ -92,7 +92,7 @@ impl Database {
         Transaction { db: self }
     }
 
-    fn update_catalog(&mut self, catalog_entry: CatalogEntry) -> DbResult<()> {
+    fn update_catalog(&mut self, catalog_entry: CatalogEntry) -> Result<()> {
         self.catalog_manager.create_table(&catalog_entry)?;
         let entry_bytes = catalog_entry.to_be_bytes()?;
         tracing::debug!("Encoded cat_entry: {:?}", entry_bytes);
@@ -104,7 +104,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> DbResult<TableId> {
+    pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> Result<TableId> {
         let path = self.base_path.join(format!("{name}.db"));
         if let Some(fid) = self.table_names.get(name) {
             return Ok(*fid);
@@ -142,7 +142,7 @@ impl Database {
         Ok(self.tables.get(&TableId(fid.0)).unwrap().table_id)
     }
 
-    pub fn insert_record(&mut self, table_id: TableId, record: &[u8]) -> DbResult<RecordId> {
+    pub fn insert_record(&mut self, table_id: TableId, record: &[u8]) -> Result<RecordId> {
         let table = self.tables.get_mut(&table_id).unwrap();
         let rid = table.insert(record, &mut self.buffer_manager)?;
         Ok(rid)

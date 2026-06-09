@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     PageGuard,
-    error::DbResult,
+    error::Result,
     page::{PAGE_SIZE, PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
 };
 
@@ -49,12 +49,12 @@ impl<G> SlottedPage for CatalogMut<G> where G: Deref<Target = [u8; PAGE_SIZE]> {
 impl<G> SlottedPageMut for CatalogMut<G> where G: DerefMut<Target = [u8; PAGE_SIZE]> {}
 
 impl PageGuard<'_> {
-    pub fn as_catalog(&self) -> DbResult<Catalog<Ref<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_catalog(&self) -> Result<Catalog<Ref<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_read(PageKind::Catalog)?;
         Ok(Catalog { data: page.data })
     }
 
-    pub fn as_catalog_mut(&mut self) -> DbResult<CatalogMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_catalog_mut(&mut self) -> Result<CatalogMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_write(PageKind::Catalog)?;
         Ok(CatalogMut { data: page.data })
     }

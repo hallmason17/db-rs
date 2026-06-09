@@ -1,11 +1,10 @@
 use std::cell::{Ref, RefMut};
 use std::ops::{Deref, DerefMut};
 
-use crate::error::{DbError, DbInputError, DbResult};
+use crate::error::{Error, InputError, Result};
 use crate::{INITIAL_FIRST_FREE_PAGE_NUMBER, PageGuard};
 
 pub mod catalog;
-pub mod fsm;
 pub mod heap;
 
 pub(crate) mod page_header_offsets {
@@ -16,10 +15,6 @@ pub(crate) mod page_header_offsets {
     pub const SIZE: usize = 19;
     pub(crate) mod header_page {
         pub const FIRST_FREE_PAGE_ID: usize = 19;
-    }
-    pub(crate) mod fsm_page {
-        pub const FSM_NUM: usize = 21;
-        pub const SIZE: usize = 23;
     }
 }
 pub(crate) const PAGE_SIZE: usize = 8192;
@@ -44,7 +39,7 @@ pub fn create_blank_page(page_id: u64, kind: PageKind) -> [u8; PAGE_SIZE] {
 }
 
 impl PageGuard<'_> {
-    fn cast_read(&self, expected: PageKind) -> DbResult<Page<Ref<'_, [u8; PAGE_SIZE]>>> {
+    fn cast_read(&self, expected: PageKind) -> Result<Page<Ref<'_, [u8; PAGE_SIZE]>>> {
         let data = self.borrow_data();
         let page = Page { data };
         if page.header().kind() != expected {
@@ -55,11 +50,11 @@ impl PageGuard<'_> {
                 expected
             );
             tracing::error!("Data: {:?}", page.data);
-            return Err(DbError::PageCast);
+            return Err(Error::PageCast);
         }
         Ok(page)
     }
-    fn cast_write(&mut self, expected: PageKind) -> DbResult<Page<RefMut<'_, [u8; PAGE_SIZE]>>> {
+    fn cast_write(&mut self, expected: PageKind) -> Result<Page<RefMut<'_, [u8; PAGE_SIZE]>>> {
         let data = self.borrow_data_mut();
         let page = Page { data };
         if page.header().kind() != expected {
@@ -69,7 +64,7 @@ impl PageGuard<'_> {
                 page.header().kind(),
                 expected
             );
-            return Err(DbError::PageCast);
+            return Err(Error::PageCast);
         }
         Ok(page)
     }
@@ -80,7 +75,6 @@ impl PageGuard<'_> {
 pub enum PageKind {
     Heap = 0,
     Catalog = 1,
-    FreeSpaceMap = 2,
 }
 
 pub trait PageAccessor {
@@ -97,9 +91,9 @@ pub trait PageAccessorMut: PageAccessor {
 }
 
 pub trait SlottedPage: PageAccessor {
-    fn get_slot_array_entry(&self, index: u16) -> DbResult<Option<SlotArrayEntry>> {
+    fn get_slot_array_entry(&self, index: u16) -> Result<Option<SlotArrayEntry>> {
         if index >= self.num_entries() {
-            return Err(DbError::InputError(DbInputError::OutOfBounds));
+            return Err(Error::InputError(InputError::OutOfBounds));
         }
         let offset = page_header_offsets::SIZE + size_of::<SlotArrayEntry>() * index as usize;
         let sa_offset = u16::from_be_bytes(self.data()[offset..offset + 2].try_into()?);
@@ -109,7 +103,7 @@ pub trait SlottedPage: PageAccessor {
             size: sa_size,
         }))
     }
-    fn get_freespace_start(&self) -> DbResult<u16> {
+    fn get_freespace_start(&self) -> Result<u16> {
         if self.num_entries() == 0 {
             Ok(u16::try_from(page_header_offsets::SIZE)?)
         } else {
@@ -117,7 +111,7 @@ pub trait SlottedPage: PageAccessor {
                 + u16::try_from(size_of::<SlotArrayEntry>())? * self.num_entries())
         }
     }
-    fn get_slot(&self, slot_index: u16) -> DbResult<Option<&[u8]>> {
+    fn get_slot(&self, slot_index: u16) -> Result<Option<&[u8]>> {
         if slot_index >= self.num_entries() {
             return Ok(None);
         }
@@ -136,7 +130,7 @@ pub trait SlottedPage: PageAccessor {
 }
 
 pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
-    fn insert(&mut self, data: &[u8]) -> DbResult<PageEntryId> {
+    fn insert(&mut self, data: &[u8]) -> Result<PageEntryId> {
         tracing::debug!("Inserting: ({:?})", data);
         let size = data.len();
         let num_entries = self.num_entries();
@@ -151,14 +145,14 @@ pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
                 );
                 sa_entry.offset - u16::try_from(size)?
             } else {
-                return Err(DbError::CorruptPageFile);
+                return Err(Error::CorruptPageFile);
             }
         } else {
             u16::try_from(PAGE_SIZE)? - u16::try_from(size)?
         };
 
         if offset < new_freespace_start {
-            return Err(DbError::PageFull);
+            return Err(Error::PageFull);
         }
 
         let new_sa_entry = SlotArrayEntry {
@@ -180,7 +174,7 @@ pub trait SlottedPageMut: SlottedPage + PageAccessorMut {
         })
     }
 
-    fn get_slot_mut(&mut self, slot_index: u16) -> DbResult<Option<&mut [u8]>> {
+    fn get_slot_mut(&mut self, slot_index: u16) -> Result<Option<&mut [u8]>> {
         if slot_index >= self.header().num_entries() {
             return Ok(None);
         }
@@ -230,7 +224,6 @@ pub trait PageHeaderReader {
         match self.data()[page_header_offsets::KIND] {
             0 => PageKind::Heap,
             1 => PageKind::Catalog,
-            2 => PageKind::FreeSpaceMap,
             _ => unreachable!(),
         }
     }

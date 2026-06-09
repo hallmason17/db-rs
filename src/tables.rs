@@ -1,12 +1,10 @@
 use crate::{
     PageId,
     buffer_pool::BufferPool,
-    error::{DbError, DbInputError, DbResult},
+    error::{Error, InputError, Result},
     ids::{FileId, TableId},
     page::{
-        PAGE_SIZE, PageAccessor, PageAccessorMut, PageHeaderReader, PageKind, SlotArrayEntry,
-        SlottedPageMut,
-        fsm::{FreeSpaceMapper, FreeSpaceMapperMut},
+        PAGE_SIZE, PageAccessor, PageHeaderReader, PageKind, SlotArrayEntry, SlottedPageMut,
         page_header_offsets,
     },
     value::{DataType, Value},
@@ -111,8 +109,6 @@ impl Tuple {
                     variable_byte_offset += len;
                 }
                 Value::Null => {
-                    // TODO: Can I do nothing here with a null bitmap? Probably not...
-                    // Do I just fill with the DT size so all headers are the same length? Probably, but consult textbook.
                     header_bytes.extend_from_slice(&vec![0u8; col.data_type.size()]);
                 }
             }
@@ -122,7 +118,7 @@ impl Tuple {
         header_bytes
     }
 
-    pub fn deserialize(bytes: &[u8], schema: &TableSchema) -> DbResult<Self> {
+    pub fn deserialize(bytes: &[u8], schema: &TableSchema) -> Result<Self> {
         let mut values = Vec::with_capacity(schema.attributes.len());
         let bitmap_size = schema.attributes.len().div_ceil(8);
         let _bitmap = &bytes[..bitmap_size];
@@ -131,13 +127,13 @@ impl Tuple {
             match attr.data_type {
                 DataType::Int => {
                     values.push(Value::Int(i32::from_be_bytes(
-                        bytes[pos..pos + 4].try_into().unwrap(),
+                        bytes[pos..pos + 4].try_into()?,
                     )));
                     pos += 4;
                 }
                 DataType::Float => {
                     values.push(Value::Float(f32::from_be_bytes(
-                        bytes[pos..pos + 4].try_into().unwrap(),
+                        bytes[pos..pos + 4].try_into()?,
                     )));
                     pos += 4;
                 }
@@ -147,9 +143,9 @@ impl Tuple {
                 }
                 DataType::VarChar => {
                     let offset =
-                        u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                        u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
-                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
                     values.push(Value::VarChar(String::from_utf8(
                         bytes[offset..offset + size].to_vec(),
@@ -157,9 +153,9 @@ impl Tuple {
                 }
                 DataType::Blob => {
                     let offset =
-                        u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                        u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
-                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
+                    let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
                     values.push(Value::Blob(bytes[offset..offset + size].to_vec()));
                 }
@@ -168,7 +164,7 @@ impl Tuple {
         Ok(Self { values })
     }
 
-    pub fn from_record(record: &Record, schema: &TableSchema) -> DbResult<Self> {
+    pub fn from_record(record: &Record, schema: &TableSchema) -> Result<Self> {
         Self::deserialize(&record.data, schema)
     }
 }
@@ -182,14 +178,9 @@ pub struct ColumnDefinition {
     pub is_nullable: bool,
 }
 impl ColumnDefinition {
-    pub fn new(
-        name: String,
-        data_type: DataType,
-        is_key: bool,
-        is_nullable: bool,
-    ) -> DbResult<Self> {
+    pub fn new(name: String, data_type: DataType, is_key: bool, is_nullable: bool) -> Result<Self> {
         if name.len() > u8::MAX as usize {
-            return Err(DbError::InputError(DbInputError::StringTooLong));
+            return Err(Error::InputError(InputError::StringTooLong));
         }
         Ok(Self {
             name,
@@ -198,7 +189,7 @@ impl ColumnDefinition {
             is_nullable,
         })
     }
-    pub fn to_be_bytes(&self) -> DbResult<Vec<u8>> {
+    pub fn to_be_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = vec![];
         let name_len = u8::try_from(self.name.len())?;
         bytes.extend_from_slice(&name_len.to_be_bytes());
@@ -209,7 +200,7 @@ impl ColumnDefinition {
         Ok(bytes)
     }
 
-    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<(Self, usize)> {
+    pub fn from_be_bytes(bytes: &[u8]) -> Result<(Self, usize)> {
         let mut data = bytes;
         let mut len = 4;
         let name_len = data[0] as usize;
@@ -259,7 +250,7 @@ impl TableSchema {
             attributes: attributes.to_vec(),
         }
     }
-    pub fn to_be_bytes(&self) -> DbResult<Vec<u8>> {
+    pub fn to_be_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = vec![];
 
         let num_attrs = u32::try_from(self.attributes.len())?;
@@ -270,10 +261,10 @@ impl TableSchema {
         }
         Ok(bytes)
     }
-    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<Self> {
+    pub fn from_be_bytes(bytes: &[u8]) -> Result<Self> {
         let mut data = bytes;
 
-        let num_attrs = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        let num_attrs = u32::from_be_bytes(bytes[0..4].try_into()?);
         data = &data[4..];
         let mut attrs = Vec::new();
         tracing::debug!("Serializing {} attrs from {:?}", num_attrs, data);
@@ -286,8 +277,6 @@ impl TableSchema {
     }
 }
 
-const FIRST_FSM_PAGE: u64 = 1;
-
 pub struct HeapStorage<'a> {
     table: &'a mut Table,
     bp: &'a mut BufferPool,
@@ -298,91 +287,7 @@ impl<'a> HeapStorage<'a> {
         Self { table, bp }
     }
 
-    fn find_page_with_free_space(&mut self) -> DbResult<u64> {
-        let ffp = {
-            let fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id,
-                page_num: self.table.current_fsm_idx,
-            })?;
-
-            let fsm_page = fsm.as_fsm()?;
-            fsm_page.find_first_free_page(self.table.last_known_free_page)
-        };
-
-        self.table.last_known_free_page = ffp;
-        Ok(ffp)
-    }
-
-    fn set_fsm_page_full(&mut self, page_num: u64) -> DbResult<()> {
-        let mut fsm = self.bp.get_page(PageId {
-            file_id: self.table.file_id,
-            page_num: self.table.current_fsm_idx,
-        })?;
-        let mut fsm_page = fsm.as_fsm_mut()?;
-        fsm_page.set_page_full(page_num);
-        Ok(())
-    }
-
-    fn is_fsm_full(&mut self) -> DbResult<bool> {
-        let full = {
-            let fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id,
-                page_num: self.table.current_fsm_idx,
-            })?;
-
-            let fsm_page = fsm.as_fsm()?;
-            fsm_page.is_full()
-        };
-
-        Ok(full)
-    }
-
-    fn handle_full_page(&mut self, page_num: u64) -> DbResult<()> {
-        tracing::warn!("Setting page {page_num} full");
-        self.set_fsm_page_full(page_num)?;
-        self.table.current_heap_page = None;
-
-        Ok(())
-    }
-
-    fn handle_full_fsm(&mut self) -> DbResult<()> {
-        tracing::warn!("FSM full!");
-        let next_fsm_num = {
-            let old_fsm = self.bp.get_page(PageId {
-                file_id: self.table.file_id,
-                page_num: self.table.current_fsm_idx,
-            })?;
-            let old = old_fsm.as_fsm()?;
-            old.fsm_num() + 1
-        };
-
-        let new_fsm_num = {
-            let mut new_fsm_page = self
-                .bp
-                .create_page(self.table.file_id, PageKind::FreeSpaceMap)?;
-            let mut new_fsm = new_fsm_page.as_fsm_mut()?;
-            let id = new_fsm.header().page_id();
-            new_fsm.set_fsm_num(next_fsm_num);
-            new_fsm.set_page_full(id);
-            id
-        };
-
-        let mut old_fsm = self.bp.get_page(PageId {
-            file_id: self.table.file_id,
-            page_num: self.table.current_fsm_idx,
-        })?;
-        let mut old_fsm_page = old_fsm.as_fsm_mut()?;
-        old_fsm_page.header_mut().set_next_page(new_fsm_num);
-        self.table.current_fsm_idx = new_fsm_num;
-
-        tracing::warn!(
-            "FSM full! Created new one at {:?}",
-            self.table.current_fsm_idx
-        );
-        Ok(())
-    }
-
-    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> DbResult<RecordId> {
+    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> Result<RecordId> {
         let mut page = if let Ok(page) = self.bp.get_page(PageId {
             file_id: self.table.file_id,
             page_num,
@@ -391,6 +296,7 @@ impl<'a> HeapStorage<'a> {
         } else {
             self.bp.create_page(self.table.file_id, PageKind::Heap)?
         };
+        self.table.current_heap_page = page.page_id.page_num;
 
         let rid = page.with_heap_mut(|heap| match heap.insert(record) {
             Ok(slot) => Ok(RecordId {
@@ -403,48 +309,23 @@ impl<'a> HeapStorage<'a> {
         Ok(rid)
     }
 
-    fn find_insert_page(&mut self) -> DbResult<u64> {
-        // Get a new one from FSM
-        let mut pnum = self.find_page_with_free_space()?;
-
-        // FSM couldn't find one -- make a new FSM.
-        if pnum == u64::MAX {
-            if self.is_fsm_full()? {
-                self.handle_full_fsm()?;
-            }
-            // Make a new one.
-            let new_page = self.bp.create_page(self.table.file_id, PageKind::Heap)?;
-            pnum = new_page.page_id.page_num;
-            tracing::warn!("Created page {pnum}");
-        }
-
-        // Update cached page.
-        self.table.current_heap_page = Some(pnum);
-
-        Ok(pnum)
+    fn handle_full_page(&mut self) -> Result<()> {
+        let guard = self.bp.create_page(self.table.file_id, PageKind::Heap)?;
+        self.table.current_heap_page = guard.page_id.page_num;
+        Ok(())
     }
 
-    pub fn insert_record(&mut self, record: &[u8]) -> DbResult<RecordId> {
+    pub fn insert_record(&mut self, record: &[u8]) -> Result<RecordId> {
         if record.len()
-            > PAGE_SIZE - page_header_offsets::SIZE - std::mem::size_of::<SlotArrayEntry>()
+            > PAGE_SIZE - page_header_offsets::SIZE - size_of::<SlotArrayEntry>()
         {
-            return Err(DbError::InputError(DbInputError::RecordTooLarge));
-        }
-
-        if let Some(page_num) = self.table.current_heap_page {
-            match self.try_insert_into_page(page_num, record) {
-                Ok(rid) => return Ok(rid),
-                Err(DbError::PageFull) => self.handle_full_page(page_num)?,
-                Err(e) => return Err(e),
-            }
+            return Err(Error::InputError(InputError::RecordTooLarge));
         }
 
         loop {
-            let free_page = self.find_insert_page()?;
-
-            match self.try_insert_into_page(free_page, record) {
+            match self.try_insert_into_page(self.table.current_heap_page, record) {
                 Ok(rid) => return Ok(rid),
-                Err(DbError::PageFull) => self.handle_full_page(free_page)?,
+                Err(Error::PageFull) => self.handle_full_page()?,
                 Err(e) => return Err(e),
             }
         }
@@ -458,9 +339,7 @@ pub struct Table {
     pub file_id: FileId,
     pub name: String,
     pub schema: TableSchema,
-    current_fsm_idx: u64,
-    last_known_free_page: u64,
-    current_heap_page: Option<u64>,
+    current_heap_page: u64,
 }
 impl Table {
     pub fn new(
@@ -468,7 +347,7 @@ impl Table {
         schema: &TableSchema,
         bp: &mut BufferPool,
         file_id: FileId,
-    ) -> DbResult<Self> {
+    ) -> Result<Self> {
         // 2. Initialize the page file.
         // 2.1 Catalog file initialization (write schema).
         let num_entries = {
@@ -487,24 +366,17 @@ impl Table {
                     page_num: 0,
                 })?;
                 let mut page = page.as_catalog_mut()?;
-                page.insert(&schema.to_be_bytes()?)?;
-            }
-            // 2.2 Write free space map page.
-            {
-                let mut page = bp.create_page(file_id, PageKind::FreeSpaceMap)?;
-                let mut page = page.as_fsm_mut()?;
-                page.set_fsm_num(0);
-                if page.header().page_id() != 1 {
-                    return Err(DbError::CorruptPageFile);
+                if page.header().page_id() != 0 {
+                    return Err(Error::CorruptPageFile);
                 }
+                page.insert(&schema.to_be_bytes()?)?;
             }
             // 2.3 Make the first heap page for storage
             {
                 let mut page = bp.create_page(file_id, PageKind::Heap)?;
-                //assert!(page.handle.page_id.page_num == 2);
                 let page = page.as_heap_mut()?;
-                if page.header().page_id() != 2 {
-                    return Err(DbError::CorruptPageFile);
+                if page.header().page_id() != 1 {
+                    return Err(Error::CorruptPageFile);
                 }
             }
         }
@@ -514,9 +386,7 @@ impl Table {
             table_id: TableId(file_id.0),
             file_id,
             schema: schema.clone(),
-            current_fsm_idx: FIRST_FSM_PAGE,
-            last_known_free_page: 2,
-            current_heap_page: None,
+            current_heap_page: 1,
         })
     }
 
@@ -526,13 +396,11 @@ impl Table {
             file_id,
             name: name.to_string(),
             schema: schema.clone(),
-            current_fsm_idx: FIRST_FSM_PAGE,
-            last_known_free_page: 2,
-            current_heap_page: None,
+            current_heap_page: 1,
         }
     }
 
-    pub fn insert(&mut self, record: &[u8], bp: &mut BufferPool) -> DbResult<RecordId> {
+    pub fn insert(&mut self, record: &[u8], bp: &mut BufferPool) -> Result<RecordId> {
         let mut storage = HeapStorage::new(self, bp);
         storage.insert_record(record)
     }

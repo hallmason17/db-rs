@@ -2,8 +2,10 @@ use std::{array::TryFromSliceError, num::TryFromIntError, string::FromUtf8Error}
 
 use thiserror::Error;
 
+pub type Result<T> = core::result::Result<T, Error>;
+
 #[derive(Error, Debug)]
-pub enum DbError {
+pub enum Error {
     #[error("Slice cast error")]
     SliceCast(#[from] TryFromSliceError),
 
@@ -32,7 +34,7 @@ pub enum DbError {
     CorruptPageFile,
 
     #[error("Input error: ")]
-    InputError(#[from] DbInputError),
+    InputError(#[from] InputError),
 
     #[error("no pages available")]
     NoPagesAvailable,
@@ -43,6 +45,9 @@ pub enum DbError {
     #[error("invalid comparison")]
     InvalidComparison(String),
 
+    #[error("parse error")]
+    ParseError(String),
+
     #[error("couldn't convert from utf8")]
     Utf8Conversion(#[from] FromUtf8Error),
 
@@ -51,12 +56,12 @@ pub enum DbError {
 }
 
 #[derive(Debug)]
-pub enum DbInputError {
+pub enum InputError {
     StringTooLong,
     OutOfBounds,
     RecordTooLarge,
 }
-impl std::fmt::Display for DbInputError {
+impl std::fmt::Display for InputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OutOfBounds => write!(f, "value out of bounds"),
@@ -68,6 +73,4 @@ impl std::fmt::Display for DbInputError {
     }
 }
 
-impl std::error::Error for DbInputError {}
-
-pub type DbResult<T> = Result<T, DbError>;
+impl std::error::Error for InputError {}

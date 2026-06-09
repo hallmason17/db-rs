@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use crate::{
     MAGIC_NUMBER, PageFileFooter,
-    error::{DbError, DbResult},
+    error::{Error, Result},
     ids::{FileId, PageId},
     page::PAGE_SIZE,
     page::PageKind,
@@ -36,7 +36,7 @@ pub struct StorageManager {
 #[allow(dead_code)]
 impl StorageManager {
     /// Create a StorageManager and open the catalog.db file or create one if it doesn't exist
-    pub fn new(base_path: &Path) -> DbResult<Self> {
+    pub fn new(base_path: &Path) -> Result<Self> {
         let mut file_map = HashMap::new();
         let mut path_map = HashMap::new();
         let catalog_path = base_path.join("catalog.db");
@@ -51,9 +51,9 @@ impl StorageManager {
         info!("Opening catalog at: {}", catalog_path.display());
 
         let metadata = file.metadata().expect("couldn't get file metadata");
-        let footer = if metadata.len() >= std::mem::size_of::<PageFileFooter>() as u64 {
-            let footer_size = std::mem::size_of::<PageFileFooter>();
-            let mut buffer = [0u8; std::mem::size_of::<PageFileFooter>()];
+        let footer = if metadata.len() >= size_of::<PageFileFooter>() as u64 {
+            let footer_size = size_of::<PageFileFooter>();
+            let mut buffer = [0u8; size_of::<PageFileFooter>()];
             file.seek(SeekFrom::End(-(footer_size as i64)))?;
             file.read_exact(&mut buffer)?;
             PageFileFooter::from_be_bytes(&buffer)
@@ -88,7 +88,7 @@ impl StorageManager {
         self.files.get(&file_id)
     }
 
-    pub fn file_exists(&self, path: &Path) -> DbResult<bool> {
+    pub fn file_exists(&self, path: &Path) -> Result<bool> {
         let exists = if self.paths.contains_key(path) {
             true
         } else {
@@ -102,7 +102,7 @@ impl StorageManager {
     }
 
     /// Opens a db file and returns a file_id
-    pub fn open_or_create_file(&mut self, path: &Path) -> DbResult<FileId> {
+    pub fn open_or_create_file(&mut self, path: &Path) -> Result<FileId> {
         if let Some(fid) = self.paths.get(path) {
             return Ok(*fid);
         }
@@ -114,9 +114,9 @@ impl StorageManager {
             .open(path)?;
 
         let metadata = file.metadata().expect("couldn't get file metadata");
-        let footer = if metadata.len() >= std::mem::size_of::<PageFileFooter>() as u64 {
-            let footer_size = std::mem::size_of::<PageFileFooter>();
-            let mut buffer = [0u8; std::mem::size_of::<PageFileFooter>()];
+        let footer = if metadata.len() >= size_of::<PageFileFooter>() as u64 {
+            let footer_size = size_of::<PageFileFooter>();
+            let mut buffer = [0u8; size_of::<PageFileFooter>()];
             file.seek(SeekFrom::End(-(footer_size as i64)))?;
             file.read_exact(&mut buffer)?;
             PageFileFooter::from_be_bytes(&buffer)
@@ -136,7 +136,7 @@ impl StorageManager {
                 "Magic number is not correct for page file {}",
                 path.display()
             );
-            return Err(DbError::CorruptPageFile);
+            return Err(Error::CorruptPageFile);
         }
 
         let file_id = self.next_id;
@@ -153,11 +153,11 @@ impl StorageManager {
         Ok(file_id)
     }
 
-    pub fn read_block(&self, page_id: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> DbResult<()> {
+    pub fn read_block(&self, page_id: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> Result<()> {
         tracing::warn!("READ page={} file={}", page_id.page_num, page_id.file_id);
         if let Some(fileinfo) = self.files.get(&page_id.file_id) {
             if page_id.page_num >= fileinfo.metadata.num_pages {
-                return Err(DbError::PageNotFound);
+                return Err(Error::PageNotFound);
             }
             let offset = page_id.page_num as usize * PAGE_SIZE;
             fileinfo
@@ -165,14 +165,14 @@ impl StorageManager {
                 .read_exact_at(page_handle.as_mut_slice(), offset as u64)?;
             return Ok(());
         }
-        Err(DbError::FileNotFound)
+        Err(Error::FileNotFound)
     }
 
-    pub fn write_block(&mut self, page_id: &PageId, page_handle: &[u8; PAGE_SIZE]) -> DbResult<()> {
+    pub fn write_block(&mut self, page_id: &PageId, page_handle: &[u8; PAGE_SIZE]) -> Result<()> {
         tracing::warn!("WRITE page={} file={}", page_id.page_num, page_id.file_id);
         // Make sure file exists.
         if !self.files.contains_key(&page_id.file_id) {
-            return Err(DbError::FileNotFound);
+            return Err(Error::FileNotFound);
         }
 
         // Make sure it has that many pages.
@@ -186,11 +186,11 @@ impl StorageManager {
                 .write_at(page_handle.as_slice(), offset as u64)?;
             return Ok(());
         }
-        tracing::error!("couldnt write block");
-        Err(DbError::Unknown)
+        error!("couldnt write block");
+        Err(Error::Unknown)
     }
 
-    pub fn append_empty_block(&mut self, file_id: FileId) -> DbResult<u64> {
+    pub fn append_empty_block(&mut self, file_id: FileId) -> Result<u64> {
         if let Some(fileinfo) = self.files.get_mut(&file_id) {
             let empty_block = [0u8; PAGE_SIZE];
             let offset = fileinfo.metadata.num_pages as usize * PAGE_SIZE;
@@ -205,15 +205,15 @@ impl StorageManager {
 
             return Ok(fileinfo.metadata.num_pages - 1);
         }
-        Err(DbError::FileNotFound)
+        Err(Error::FileNotFound)
     }
 
     // TODO: Dont call `append_empty_block` in a loop. Instead, do it all at once... we know how
     // big it needs to be.
-    pub fn ensure_capacity(&mut self, file_id: FileId, number_of_pages: u64) -> DbResult<()> {
+    pub fn ensure_capacity(&mut self, file_id: FileId, number_of_pages: u64) -> Result<()> {
         let mut num_pages = match self.files.get(&file_id) {
             Some(info) => info.metadata.num_pages,
-            None => return Err(DbError::FileNotFound),
+            None => return Err(Error::FileNotFound),
         };
         while num_pages < number_of_pages {
             self.append_empty_block(file_id)?;
@@ -222,9 +222,9 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn get_next_page_id(&mut self, file_id: FileId) -> DbResult<u64> {
+    pub fn get_next_page_id(&mut self, file_id: FileId) -> Result<u64> {
         if !self.files.contains_key(&file_id) {
-            return Err(DbError::FileNotFound);
+            return Err(Error::FileNotFound);
         }
         self.append_empty_block(file_id)
     }
@@ -335,7 +335,7 @@ mod tests {
             },
             &mut buf,
         );
-        assert!(matches!(result.unwrap_err(), DbError::PageNotFound));
+        assert!(matches!(result.unwrap_err(), Error::PageNotFound));
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
 
         let mut sm = StorageManager::new(dir.path()).unwrap();
         let result = sm.open_or_create_file(&path);
-        assert!(matches!(result.unwrap_err(), DbError::CorruptPageFile));
+        assert!(matches!(result.unwrap_err(), Error::CorruptPageFile));
     }
 
     #[test]

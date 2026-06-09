@@ -3,11 +3,11 @@ use std::time::Instant;
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
-    executor::Executor,
+    execution::executor::Executor,
     expr::Expr::{self, AttrRef},
     plan::{PlanNode, QueryPlan},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema},
+    tables::{ColumnDefinition, TableSchema, Tuple},
     transaction::Transaction,
     value::{DataType, Value},
 };
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /*
     let mut tuples = vec![];
-    for i in 0..10000 {
+    for i in 0..1000 {
         let tuple = Tuple::new(&[
             Value::Int(1),
             Value::VarChar(format!("mason{i}")),

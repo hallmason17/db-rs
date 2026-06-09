@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     PageGuard,
-    error::DbResult,
+    error::Result,
     page::{PAGE_SIZE, PageAccessor, PageAccessorMut, SlottedPage, SlottedPageMut},
 };
 
@@ -50,23 +50,23 @@ impl<G> SlottedPageMut for HeapMut<G> where G: DerefMut<Target = [u8; PAGE_SIZE]
 impl PageGuard<'_> {
     pub fn with_heap_mut<T>(
         &mut self,
-        f: impl FnOnce(&mut HeapMut<RefMut<'_, [u8; PAGE_SIZE]>>) -> DbResult<T>,
-    ) -> DbResult<T> {
+        f: impl FnOnce(&mut HeapMut<RefMut<'_, [u8; PAGE_SIZE]>>) -> Result<T>,
+    ) -> Result<T> {
         let page = self.cast_write(PageKind::Heap)?;
         f(&mut HeapMut { data: page.data })
     }
     pub fn with_heap<T>(
         &self,
-        f: impl FnOnce(&Heap<Ref<'_, [u8; PAGE_SIZE]>>) -> DbResult<T>,
-    ) -> DbResult<T> {
+        f: impl FnOnce(&Heap<Ref<'_, [u8; PAGE_SIZE]>>) -> Result<T>,
+    ) -> Result<T> {
         let page = self.cast_read(PageKind::Heap)?;
         f(&Heap { data: page.data })
     }
-    pub fn as_heap(&self) -> DbResult<Heap<Ref<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_heap(&self) -> Result<Heap<Ref<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_read(PageKind::Heap)?;
         Ok(Heap { data: page.data })
     }
-    pub fn as_heap_mut(&mut self) -> DbResult<HeapMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
+    pub fn as_heap_mut(&mut self) -> Result<HeapMut<RefMut<'_, [u8; PAGE_SIZE]>>> {
         let page = self.cast_write(PageKind::Heap)?;
         Ok(HeapMut { data: page.data })
     }

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::{
-    error::{DbError, DbResult},
+    error::{Error, Result},
     tables::Tuple,
     value::Value,
 };
@@ -18,6 +18,10 @@ pub enum Expr {
     Like(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
+    Add(Box<Expr>, Box<Expr>),
+    Subtract(Box<Expr>, Box<Expr>),
+    Multiply(Box<Expr>, Box<Expr>),
+    Divide(Box<Expr>, Box<Expr>),
 }
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,12 +37,16 @@ impl Display for Expr {
             Self::IsNotNull(l) => write!(f, "{l} IS NOT NULL"),
             Self::Or(l, r) => write!(f, "{l} OR {r}"),
             Self::Not(e) => write!(f, "NOT {e}"),
+            Self::Add(l, r) => write!(f, "{l} + {r}"),
+            Self::Subtract(l, r) => write!(f, "{l} - {r}"),
+            Self::Multiply(l, r) => write!(f, "{l} * {r}"),
+            Self::Divide(l, r) => write!(f, "{l} / {r}"),
         }
     }
 }
 
 impl Expr {
-    pub fn evaluate(&self, tuple: Option<&Tuple>) -> DbResult<Value> {
+    pub fn evaluate(&self, tuple: Option<&Tuple>) -> Result<Value> {
         use Value::*;
         match self {
             Self::And(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
@@ -52,7 +60,7 @@ impl Expr {
                     }
                 }
                 (Null, Null) => Ok(Null),
-                (_, _) => Err(DbError::InvalidComparison(format!(
+                (_, _) => Err(Error::InvalidComparison(format!(
                     "cannot eval '{l} AND {r}'"
                 ))),
             },
@@ -67,9 +75,7 @@ impl Expr {
                 (VarChar(l), VarChar(r)) => Ok(Boolean(l == r)),
                 (Blob(l), Blob(r)) => Ok(Boolean(l == r)),
                 (Null, _) | (_, Null) => Ok(Null),
-                (_, _) => Err(DbError::InvalidComparison(format!(
-                    "cannot eval '{l} = {r}'"
-                ))),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} = {r}'"))),
             },
             Self::Or(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
                 // https://spark.apache.org/docs/4.1.2/sql-ref-null-semantics.html#logical-operators
@@ -82,7 +88,7 @@ impl Expr {
                     }
                 }
                 (Null, Null) => Ok(Null),
-                (_, _) => Err(DbError::InvalidComparison(format!(
+                (_, _) => Err(Error::InvalidComparison(format!(
                     "cannot eval '{l} OR {r}'"
                 ))),
             },
@@ -95,9 +101,7 @@ impl Expr {
                 (VarChar(l), VarChar(r)) => Ok(Boolean(l > r)),
                 (Blob(l), Blob(r)) => Ok(Boolean(l > r)),
                 (Null, _) | (_, Null) => Ok(Null),
-                (_, _) => Err(DbError::InvalidComparison(format!(
-                    "cannot eval '{l} > {r}'"
-                ))),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} > {r}'"))),
             },
             Self::LessThan(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
                 (Boolean(l), Boolean(r)) => Ok(Boolean(!l & r)),
@@ -108,14 +112,12 @@ impl Expr {
                 (VarChar(l), VarChar(r)) => Ok(Boolean(l < r)),
                 (Blob(l), Blob(r)) => Ok(Boolean(l < r)),
                 (Null, _) | (_, Null) => Ok(Null),
-                (_, _) => Err(DbError::InvalidComparison(format!(
-                    "cannot eval '{l} < {r}'"
-                ))),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} < {r}'"))),
             },
             Self::Not(r) => match r.evaluate(tuple)? {
                 Boolean(b) => Ok(Boolean(!b)),
                 Null => Ok(Null),
-                _ => Err(DbError::InvalidComparison(format!("cannot eval 'NOT {r}'"))),
+                _ => Err(Error::InvalidComparison(format!("cannot eval 'NOT {r}'"))),
             },
             Self::IsNull(r) => match r.evaluate(tuple)? {
                 Null => Ok(Boolean(true)),
@@ -126,6 +128,39 @@ impl Expr {
                 Boolean(_) | Int(_) | Float(_) | Blob(_) | VarChar(_) => Ok(Boolean(true)),
             },
             Self::Like(_l, _r) => todo!(),
+            Self::Add(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l + r)),
+                (Float(l), Float(r)) => Ok(Float(l + r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) + r)),
+                (Float(l), Int(r)) => Ok(Float(l + (r as f32))),
+                (VarChar(l), VarChar(r)) => Ok(VarChar(l + &r)),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} + {r}'"))),
+            },
+            Self::Subtract(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l - r)),
+                (Float(l), Float(r)) => Ok(Float(l - r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) - r)),
+                (Float(l), Int(r)) => Ok(Float(l - (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} - {r}'"))),
+            },
+            Self::Multiply(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l * r)),
+                (Float(l), Float(r)) => Ok(Float(l * r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) * r)),
+                (Float(l), Int(r)) => Ok(Float(l * (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} * {r}'"))),
+            },
+            Self::Divide(l, r) => match (l.evaluate(tuple)?, r.evaluate(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l / r)),
+                (Float(l), Float(r)) => Ok(Float(l / r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) / r)),
+                (Float(l), Int(r)) => Ok(Float(l / (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} / {r}'"))),
+            },
         }
     }
 }
@@ -133,6 +168,54 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use crate::{expr::Expr, tables::Tuple, value::Value};
+
+    #[test]
+    fn add_ints() {
+        let expr = Expr::Add(
+            Box::new(Expr::Constant(Value::Int(1))),
+            Box::new(Expr::Constant(Value::Int(1))),
+        );
+        assert_eq!(expr.evaluate(None).unwrap(), Value::Int(2))
+    }
+
+    #[test]
+    fn add_strings() {
+        let expr = Expr::Add(
+            Box::new(Expr::Constant(Value::VarChar("hello ".into()))),
+            Box::new(Expr::Constant(Value::VarChar("world".into()))),
+        );
+        assert_eq!(
+            expr.evaluate(None).unwrap(),
+            Value::VarChar("hello world".into())
+        )
+    }
+
+    #[test]
+    fn divide_int_float() {
+        let expr = Expr::Divide(
+            Box::new(Expr::Constant(Value::Float(1.5))),
+            Box::new(Expr::Constant(Value::Int(2))),
+        );
+        assert_eq!(expr.evaluate(None).unwrap(), Value::Float(0.75))
+    }
+
+    #[test]
+    fn sub_constants() {
+        let expr = Expr::Subtract(
+            Box::new(Expr::Constant(Value::Int(1))),
+            Box::new(Expr::Constant(Value::Int(1))),
+        );
+        assert_eq!(expr.evaluate(None).unwrap(), Value::Int(0))
+    }
+
+    #[test]
+    fn mult_constants() {
+        let expr = Expr::Multiply(
+            Box::new(Expr::Constant(Value::Int(1))),
+            Box::new(Expr::Constant(Value::Int(1))),
+        );
+        assert_eq!(expr.evaluate(None).unwrap(), Value::Int(1))
+    }
 
     #[test]
     fn eq_constants() {

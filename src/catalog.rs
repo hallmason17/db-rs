@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
-    error::DbResult,
+    error::Result,
     ids::TableId,
     page::{PageAccessor, PageHeaderReader, SlottedPageMut},
     tables::TableSchema,
@@ -17,7 +17,7 @@ pub struct CatalogEntry {
     pub schema: TableSchema,
 }
 impl CatalogEntry {
-    pub fn to_be_bytes(self) -> DbResult<Vec<u8>> {
+    pub fn to_be_bytes(self) -> Result<Vec<u8>> {
         let mut bytes = vec![];
 
         bytes.extend_from_slice(&self.table_id.0.to_be_bytes());
@@ -38,9 +38,9 @@ impl CatalogEntry {
         Ok(bytes)
     }
 
-    pub fn from_be_bytes(bytes: &[u8]) -> DbResult<CatalogEntry> {
+    pub fn from_be_bytes(bytes: &[u8]) -> Result<CatalogEntry> {
         let data = bytes;
-        let table_id = TableId(u32::from_be_bytes(data[0..4].try_into().unwrap()));
+        let table_id = TableId(u32::from_be_bytes(data[0..4].try_into()?));
         let data = &data[4..];
         let mut len = data[0] as usize;
         let data = &data[1..];
@@ -64,10 +64,10 @@ impl CatalogEntry {
 }
 
 pub trait Catalog {
-    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> DbResult<()>;
+    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()>;
     fn get_schema(&self, name: &str) -> Option<&TableSchema>;
     fn list_tables(&self) -> Vec<String>;
-    fn drop_table(&mut self) -> DbResult<()>;
+    fn drop_table(&mut self) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -75,7 +75,7 @@ pub struct CatalogManager {
     tables: HashMap<String, CatalogEntry>,
 }
 impl CatalogManager {
-    pub fn load(buffer_manager: &mut BufferPool) -> DbResult<Self> {
+    pub fn load(buffer_manager: &mut BufferPool) -> Result<Self> {
         let mut tables = HashMap::new();
         let mut page = buffer_manager.get_page(CATALOG_PAGE_ID)?;
         let mut catalog = page.as_catalog_mut()?;
@@ -109,7 +109,7 @@ impl CatalogManager {
 }
 
 impl Catalog for CatalogManager {
-    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> DbResult<()> {
+    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()> {
         self.tables
             .insert(catalog_entry.table_name.clone(), catalog_entry.clone());
 
@@ -127,7 +127,7 @@ impl Catalog for CatalogManager {
         self.tables.keys().map(String::from).collect::<Vec<_>>()
     }
 
-    fn drop_table(&mut self) -> DbResult<()> {
+    fn drop_table(&mut self) -> Result<()> {
         todo!()
     }
 }

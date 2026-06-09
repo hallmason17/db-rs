@@ -4,12 +4,9 @@ use std::{
 };
 
 use crate::{
-    error::{DbError, DbResult},
+    error::{Error, Result},
     ids::{FileId, PageId},
-    page::{
-        PAGE_SIZE, Page, PageAccessor, PageHeaderMut, PageHeaderReader, PageKind,
-        page_header_offsets,
-    },
+    page::{PAGE_SIZE, Page, PageAccessor, PageHeaderMut, PageHeaderReader, PageKind},
     storage::StorageManager,
 };
 
@@ -110,11 +107,11 @@ impl BufferPool {
         num_pages: u64,
         replacement_strategy: ReplacementStrategy,
         storage_manager: StorageManager,
-    ) -> DbResult<Self> {
+    ) -> Result<Self> {
         let frames = vec![Frame::default(); usize::try_from(num_pages)?];
         let free_frames = (0..num_pages)
             .map(usize::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<core::result::Result<Vec<_>, _>>()?;
         Ok(Self {
             replacement_strategy,
             frames,
@@ -124,7 +121,7 @@ impl BufferPool {
             storage_manager: RefCell::new(storage_manager),
         })
     }
-    pub fn flush_all(&self) -> DbResult<()> {
+    pub fn flush_all(&self) -> Result<()> {
         for frame in &self.frames {
             let state = frame.state.borrow();
             if state.dirty {
@@ -167,7 +164,7 @@ impl BufferPool {
             }
         }
     }
-    fn evict_page(&self, frame_num: FrameNum) -> DbResult<()> {
+    fn evict_page(&self, frame_num: FrameNum) -> Result<()> {
         let frame = &self.frames[usize::try_from(frame_num)?];
         tracing::warn!("EVICTING FRAME: {}, {:?}", frame_num, frame.state.borrow());
         let state = &mut frame.state.borrow_mut();
@@ -188,7 +185,7 @@ impl BufferPool {
         Ok(())
     }
 
-    pub fn get_page(&self, page_id: PageId) -> DbResult<PageGuard<'_>> {
+    pub fn get_page(&self, page_id: PageId) -> Result<PageGuard<'_>> {
         if let Some(frame_num) = self.find_entry_in_map(page_id) {
             let frame = &self.frames[usize::try_from(frame_num)?];
             frame.pin();
@@ -226,11 +223,11 @@ impl BufferPool {
 
             Ok(PageGuard { frame, page_id })
         } else {
-            Err(DbError::NoPagesAvailable)
+            Err(Error::NoPagesAvailable)
         }
     }
 
-    pub fn create_page(&self, file_id: FileId, kind: PageKind) -> DbResult<PageGuard<'_>> {
+    pub fn create_page(&self, file_id: FileId, kind: PageKind) -> Result<PageGuard<'_>> {
         if let Some(frame_index) = self.select_victim() {
             let page_num = self
                 .storage_manager
@@ -253,12 +250,6 @@ impl BufferPool {
 
             {
                 let mut data = frame.data.borrow_mut();
-                if matches!(kind, PageKind::FreeSpaceMap) {
-                    data.fill(u8::MAX);
-                    data[page_header_offsets::fsm_page::FSM_NUM
-                        ..page_header_offsets::fsm_page::FSM_NUM + 2]
-                        .fill(0);
-                }
                 let mut header = PageHeaderMut::new(&mut data[..]);
                 header.set_kind(kind);
                 header.set_num_entries(0);
@@ -278,7 +269,7 @@ impl BufferPool {
                     .collect::<Vec<_>>(),
                 self.page_table
             );
-            Err(DbError::Unknown)
+            Err(Error::Unknown)
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    error::{DbError, DbResult},
+    error::{Error, Result},
     plan::{PlanNode::SeqScan, QueryPlan},
     tables::Tuple,
     transaction::Transaction,
@@ -13,13 +13,13 @@ impl Executor<'_> {
     }
 
     #[allow(clippy::collapsible_match)] // shut up clippy i'm not done yet
-    pub fn execute(&self, plan: QueryPlan) -> DbResult<Vec<Tuple>> {
+    pub fn execute(&self, plan: QueryPlan) -> Result<Vec<Tuple>> {
         let tuples = match plan {
             QueryPlan::Select(node) => match node {
                 SeqScan { table, filter } => self.txn.scan(table.table_id, filter)?,
-                _ => return Err(DbError::Unknown),
+                _ => return Err(Error::Unknown),
             },
-            _ => return Err(DbError::Unknown),
+            _ => return Err(Error::Unknown),
         };
         Ok(tuples)
     }
