@@ -3,6 +3,15 @@ use crate::{
     tables::{Table, TableSchema},
 };
 
+#[derive(Debug)]
+pub enum SqlStatement {
+    Select {
+        cols: Vec<Expr>,
+        tables: Vec<Table>,
+        filter: Option<Expr>,
+    },
+}
+
 pub enum SortOrder {
     Ascending,
     Descending,
@@ -10,6 +19,7 @@ pub enum SortOrder {
 
 pub enum QueryPlan {
     CreateTable { schema: TableSchema },
+    Insert,
     Update,
     Delete,
     Select(PlanNode),
@@ -17,15 +27,16 @@ pub enum QueryPlan {
 
 pub enum PlanNode {
     Filter {
-        data_source: Box<PlanNode>,
+        children: Vec<PlanNode>,
         pred: Expr,
     },
     SeqScan {
+        cols: Vec<Expr>,
         table: Table,
         filter: Option<Expr>,
     },
     Sort {
-        data_source: Box<PlanNode>,
+        children: Vec<PlanNode>,
         order: SortOrder,
     },
 }

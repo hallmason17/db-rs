@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    plan::{PlanNode::SeqScan, QueryPlan},
+    planner::planner::{PlanNode::SeqScan, QueryPlan},
     tables::Tuple,
     transaction::Transaction,
 };
@@ -16,7 +16,11 @@ impl Executor<'_> {
     pub fn execute(&self, plan: QueryPlan) -> Result<Vec<Tuple>> {
         let tuples = match plan {
             QueryPlan::Select(node) => match node {
-                SeqScan { table, filter } => self.txn.scan(table.table_id, filter)?,
+                SeqScan {
+                    table,
+                    cols,
+                    filter,
+                } => self.txn.scan(table.table_id, &cols, filter)?,
                 _ => return Err(Error::Unknown),
             },
             _ => return Err(Error::Unknown),

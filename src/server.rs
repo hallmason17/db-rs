@@ -3,12 +3,18 @@ use std::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
     thread::JoinHandle,
+    time::Instant,
 };
+
+use sqlparser::parser::Parser;
 
 use crate::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
+    execution::executor::Executor,
+    planner::{binder::Binder, planner::Planner},
     storage::StorageManager,
+    transaction::Transaction,
 };
 
 #[allow(dead_code)]
@@ -24,7 +30,7 @@ impl DbWorker {
             db: Database::open(
                 path.clone(),
                 BufferPool::new(
-                    1024,
+                    1024 * 16,
                     ReplacementStrategy::Clock,
                     StorageManager::new(&path)?,
                 )?,
@@ -33,9 +39,19 @@ impl DbWorker {
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let planner = Planner::new();
+        let mut binder = Binder::new();
         loop {
             let job = self.job_queue.recv()?;
+            let start = Instant::now();
             tracing::info!("Got job: {job:#?}");
+            let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job)?;
+            let statement = binder.bind(ast.first().unwrap().clone(), &self.db)?;
+            let plan = planner.plan(statement);
+            let txn = Transaction::new(&mut self.db);
+            let executor = Executor::new(&txn);
+            let rows = executor.execute(plan)?;
+            println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
         }
     }
 }

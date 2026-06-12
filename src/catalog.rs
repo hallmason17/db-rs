@@ -67,6 +67,7 @@ pub trait Catalog {
     fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()>;
     fn get_schema(&self, name: &str) -> Option<&TableSchema>;
     fn list_tables(&self) -> Vec<String>;
+    fn get_table(&self, name: &str) -> Option<&CatalogEntry>;
     fn drop_table(&mut self) -> Result<()>;
 }
 
@@ -125,6 +126,10 @@ impl Catalog for CatalogManager {
 
     fn list_tables(&self) -> Vec<String> {
         self.tables.keys().map(String::from).collect::<Vec<_>>()
+    }
+
+    fn get_table(&self, name: &str) -> Option<&CatalogEntry> {
+        self.tables.get(name)
     }
 
     fn drop_table(&mut self) -> Result<()> {

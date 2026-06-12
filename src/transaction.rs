@@ -11,9 +11,9 @@ impl Transaction<'_> {
         Transaction { db }
     }
 
-    pub fn scan(&self, table: TableId, filter: Option<Expr>) -> Result<Vec<Tuple>> {
+    pub fn scan(&self, table: TableId, cols: &[Expr], filter: Option<Expr>) -> Result<Vec<Tuple>> {
         let mut tuples = vec![];
-        let mut scan = SeqScanExecutor::new(self, table, &filter);
+        let mut scan = SeqScanExecutor::new(self, table, cols, &filter);
         while let Some(tuple) = scan.next_tuple()? {
             tuples.push(tuple);
         }

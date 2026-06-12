@@ -5,12 +5,16 @@ use db_rs::{
     database::Database,
     execution::executor::Executor,
     expr::Expr::{self, AttrRef},
-    plan::{PlanNode, QueryPlan},
+    planner::{
+        binder::Binder,
+        planner::{PlanNode, Planner, QueryPlan},
+    },
     storage::StorageManager,
     tables::{ColumnDefinition, TableSchema, Tuple},
     transaction::Transaction,
     value::{DataType, Value},
 };
+use sqlparser::parser::Parser;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,41 +39,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = db.create_table("users", &schema)?;
 
-    /*
-    let mut tuples = vec![];
-    for i in 0..1000 {
-        let tuple = Tuple::new(&[
-            Value::Int(1),
-            Value::VarChar(format!("mason{i}")),
-            Value::VarChar(format!("masonh{i}@example.com")),
-        ]);
-        tuples.push(tuple)
-    }
+    let start = Instant::now();
 
-    for tuple in &tuples {
-        db.insert_record(table, &tuple.serialize(&schema))?;
-    }
+    /*
+        let mut tuples = vec![];
+        for i in 0..1000 {
+            let tuple = Tuple::new(&[
+                Value::Int(i),
+                Value::VarChar(format!("mason{i}")),
+                Value::VarChar(format!("masonh{i}@example.com")),
+            ]);
+            tuples.push(tuple)
+        }
+
+        for tuple in &tuples {
+            db.insert_record(table, &tuple.serialize(&schema))?;
+        }
     */
 
-    let start = Instant::now();
-    let rows = {
-        let table = db.tables.get(&table).unwrap().clone();
-        let txn = Transaction::new(&mut db);
-        let executor = Executor::new(&txn);
-        executor.execute(QueryPlan::Select(PlanNode::SeqScan {
-            table,
-            filter: Some(Expr::Equal(
-                Box::new(AttrRef(0)),
-                Box::new(Expr::Constant(Value::Int(1))),
-            )),
-        }))?
-    };
+    let sql = "select id, name from users;";
+    let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)?;
+    let mut binder = Binder::new();
+    let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
+    let planner = Planner::new();
+    let plan = planner.plan(bound);
+    let txn = Transaction::new(&mut db);
+    let executor = Executor::new(&txn);
 
-    println!("Found {} row(s):", rows.len());
-    for _row in rows {
-        //println!("{row:?}");
-    }
-    println!("Elapsed: {:?}", start.elapsed());
+    let rows = executor.execute(plan)?;
+    println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
+    /*
+        for row in rows {
+            println!("{row:?}");
+        }
+    */
 
     Ok(())
 }

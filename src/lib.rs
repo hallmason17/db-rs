@@ -6,7 +6,7 @@ pub mod execution;
 pub mod expr;
 pub mod ids;
 pub mod page;
-pub mod plan;
+pub mod planner;
 pub mod server;
 pub mod sql;
 pub mod storage;

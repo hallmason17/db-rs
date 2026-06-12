@@ -6,6 +6,7 @@ use crate::{
     value::Value,
 };
 
+#[derive(Debug)]
 pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     AttrRef(usize),

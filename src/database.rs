@@ -147,6 +147,13 @@ impl Database {
         let rid = table.insert(record, &mut self.buffer_manager)?;
         Ok(rid)
     }
+
+    pub fn get_table(&self, name: &str) -> Option<&Table> {
+        if let Some(id) = self.table_names.get(name) {
+            return self.tables.get(id);
+        }
+        None
+    }
 }
 
 impl Drop for Database {
