@@ -13,6 +13,7 @@ The project is under active development.
 - [ ] BNL join
 - [ ] Hash join
 - [ ] Merge join
+- [ ] Row pretty printer/formatter
 
 ### SQL
 - [x] Basic SELECT
