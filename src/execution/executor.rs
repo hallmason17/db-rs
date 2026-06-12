@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    planner::planner::{PlanNode::SeqScan, QueryPlan},
+    planner::plan::{PlanNode::SeqScan, QueryPlan},
     tables::Tuple,
     transaction::Transaction,
 };

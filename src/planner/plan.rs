@@ -12,11 +12,13 @@ pub enum SqlStatement {
     },
 }
 
+#[derive(Debug)]
 pub enum SortOrder {
     Ascending,
     Descending,
 }
 
+#[derive(Debug)]
 pub enum QueryPlan {
     CreateTable { schema: TableSchema },
     Insert,
@@ -25,6 +27,7 @@ pub enum QueryPlan {
     Select(PlanNode),
 }
 
+#[derive(Debug)]
 pub enum PlanNode {
     Filter {
         children: Vec<PlanNode>,
@@ -58,5 +61,10 @@ impl Planner {
                 filter,
             }),
         }
+    }
+}
+impl Default for Planner {
+    fn default() -> Self {
+        Self::new()
     }
 }

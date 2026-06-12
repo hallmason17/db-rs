@@ -4,15 +4,11 @@ use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     execution::executor::Executor,
-    expr::Expr::{self, AttrRef},
-    planner::{
-        binder::Binder,
-        planner::{PlanNode, Planner, QueryPlan},
-    },
+    planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema, Tuple},
+    tables::{ColumnDefinition, TableSchema},
     transaction::Transaction,
-    value::{DataType, Value},
+    value::DataType,
 };
 use sqlparser::parser::Parser;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -37,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let schema = TableSchema::new(&attributes);
 
-    let table = db.create_table("users", &schema)?;
+    let _table = db.create_table("users", &schema)?;
 
     let start = Instant::now();
 
@@ -49,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Value::VarChar(format!("mason{i}")),
                 Value::VarChar(format!("masonh{i}@example.com")),
             ]);
-            tuples.push(tuple)
+            tuples.push(tuple,)
         }
 
         for tuple in &tuples {

@@ -1,5 +1,5 @@
 use std::{
-    io::Read,
+    io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::mpsc,
     thread::JoinHandle,
@@ -12,18 +12,24 @@ use crate::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     execution::executor::Executor,
-    planner::{binder::Binder, planner::Planner},
+    planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
     transaction::Transaction,
 };
 
+#[derive(Debug)]
+pub struct Job {
+    sql_string: String,
+    sender: mpsc::Sender<String>,
+}
+
 #[allow(dead_code)]
 pub struct DbWorker {
-    job_queue: mpsc::Receiver<String>,
+    job_queue: mpsc::Receiver<Job>,
     db: Database,
 }
 impl DbWorker {
-    pub fn new(job_queue: mpsc::Receiver<String>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(job_queue: mpsc::Receiver<Job>) -> Result<Self, Box<dyn std::error::Error>> {
         let path = std::env::current_dir()?;
         Ok(Self {
             job_queue,
@@ -44,13 +50,15 @@ impl DbWorker {
         loop {
             let job = self.job_queue.recv()?;
             let start = Instant::now();
-            tracing::info!("Got job: {job:#?}");
-            let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job)?;
+            let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job.sql_string)?;
             let statement = binder.bind(ast.first().unwrap().clone(), &self.db)?;
             let plan = planner.plan(statement);
             let txn = Transaction::new(&mut self.db);
             let executor = Executor::new(&txn);
             let rows = executor.execute(plan)?;
+            for row in &rows {
+                job.sender.send(format!("{:?}", row))?;
+            }
             println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
         }
     }
@@ -58,7 +66,7 @@ impl DbWorker {
 
 #[allow(dead_code)]
 pub struct Server {
-    job_queue: mpsc::Sender<String>,
+    job_queue: mpsc::Sender<Job>,
     worker_thread: Option<JoinHandle<()>>,
 }
 
@@ -76,17 +84,20 @@ impl Server {
     }
     fn handle_conn(
         mut stream: TcpStream,
-        job_queue: mpsc::Sender<String>,
+        job_queue: mpsc::Sender<Job>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::info!("handle_conn()");
         let mut inputbuf = [0u8; 4096];
         let bytes = stream.read(&mut inputbuf)?;
-        job_queue.send(
-            String::from_utf8_lossy(&inputbuf[..bytes])
+        let (sender, receiver) = mpsc::channel();
+        job_queue.send(Job {
+            sql_string: String::from_utf8_lossy(&inputbuf[..bytes])
                 .trim()
                 .to_string(),
-        )?;
-        tracing::info!("{job_queue:#?}");
+            sender,
+        })?;
+        while let Ok(row) = receiver.recv() {
+            let _ = stream.write(format!("{:?}\r\n", row).as_bytes())?;
+        }
         Ok(())
     }
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
