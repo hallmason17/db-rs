@@ -3,27 +3,36 @@ db-rs is an educational database engine written in Rust.
 
 The project is under active development.
 
-### Currently implemented:
-- tuple insertion
-- page-file storage
-- slotted pages
-- buffer pool
-- catalog metadata
-- tuple serialization
-- free-space tracking
-- naive insert benchmarks.
+### Features/Status
+- [x] Heap page storage (slotted pages)
+- [x] Buffer pool page cache
+- [x] Multi-table support
+- [x] Server binary with TCP listener
+- [x] Sequential scans with filters
+- [ ] Indexing (Btree)
+- [ ] BNL join
+- [ ] Hash join
+- [ ] Merge join
 
-### Planned:
-- Table scans
-- SQL query support
-- WAL
+### SQL
+- [x] Basic SELECT
+- [x] Basic WHERE
+- [ ] CREATE TABLE
+- [ ] INSERT
+- [ ] UPDATE
+- [ ] DELETE
+- [ ] DROP
+- [ ] TRUNCATE
+- [ ] EXPLAIN
+- [ ] ANALYZE
+- [ ] LIMIT
+
 
 ## Usage
 ```bash
 cargo build
 cargo test
-cargo run
+cargo run --bin db # tcp server
+cargo run --bin db-rs # small demo
 cargo bench
 ```
-
-
