@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     PageId,
     buffer_pool::BufferPool,
@@ -142,22 +144,20 @@ impl Tuple {
                     pos += 1;
                 }
                 DataType::VarChar => {
-                    let offset =
-                        u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
+                    let offset = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
                     let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
-                    values.push(Value::VarChar(String::from_utf8(
-                        bytes[offset..offset + size].to_vec(),
-                    )?));
+                    values.push(Value::VarChar(
+                        String::from_utf8(bytes[offset..offset + size].to_vec())?.into(),
+                    ));
                 }
                 DataType::Blob => {
-                    let offset =
-                        u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
+                    let offset = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
                     let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
-                    values.push(Value::Blob(bytes[offset..offset + size].to_vec()));
+                    values.push(Value::Blob(Rc::from(&bytes[offset..offset + size])));
                 }
             }
         }
@@ -316,9 +316,7 @@ impl<'a> HeapStorage<'a> {
     }
 
     pub fn insert_record(&mut self, record: &[u8]) -> Result<RecordId> {
-        if record.len()
-            > PAGE_SIZE - page_header_offsets::SIZE - size_of::<SlotArrayEntry>()
-        {
+        if record.len() > PAGE_SIZE - page_header_offsets::SIZE - size_of::<SlotArrayEntry>() {
             return Err(Error::InputError(InputError::RecordTooLarge));
         }
 

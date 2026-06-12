@@ -91,7 +91,7 @@ impl Binder {
                             }
                             ast::Value::SingleQuotedString(str)
                             | ast::Value::DoubleQuotedString(str) => {
-                                Ok(Expr::Constant(Value::VarChar(str.to_string())))
+                                Ok(Expr::Constant(Value::VarChar(str.as_str().into())))
                             }
                             _ => {
                                 todo!()

@@ -134,7 +134,12 @@ impl Expr {
                 (Float(l), Float(r)) => Ok(Float(l + r)),
                 (Int(l), Float(r)) => Ok(Float((l as f32) + r)),
                 (Float(l), Int(r)) => Ok(Float(l + (r as f32))),
-                (VarChar(l), VarChar(r)) => Ok(VarChar(l + &r)),
+                (VarChar(l), VarChar(r)) => {
+                    let mut s = String::with_capacity(l.len() + r.len());
+                    s.push_str(&l);
+                    s.push_str(&r);
+                    Ok(VarChar(s.into()))
+                }
                 (Null, _) | (_, Null) => Ok(Null),
                 (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} + {r}'"))),
             },
@@ -231,7 +236,9 @@ mod tests {
     fn eq_wrong_types() {
         let expr = Expr::Equal(
             Box::new(Expr::Constant(Value::Int(1))),
-            Box::new(Expr::Constant(Value::VarChar(String::from("hello world")))),
+            Box::new(Expr::Constant(Value::VarChar(
+                format!("hello world").into(),
+            ))),
         );
         assert!(expr.evaluate(None).is_err())
     }

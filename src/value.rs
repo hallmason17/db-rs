@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, rc::Rc};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
@@ -32,10 +32,10 @@ impl DataType {
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i32),
-    VarChar(String),
+    VarChar(Rc<str>),
     Float(f32),
     Boolean(bool),
-    Blob(Vec<u8>),
+    Blob(Rc<[u8]>),
     Null,
 }
 impl Value {
@@ -139,7 +139,7 @@ mod tests {
         assert!(Value::Int(0) < Value::VarChar("".into()));
         assert!(Value::Float(std::f32::NEG_INFINITY) > Value::Null);
         assert!(Value::VarChar("a".into()) > Value::Int(9999));
-        assert!(Value::Blob(vec![0]) > Value::Int(9999));
+        assert!(Value::Blob(Rc::new([0])) > Value::Int(9999));
     }
 
     #[test]
@@ -148,7 +148,7 @@ mod tests {
         assert!(Value::Float(1.5) > Value::Float(1.0));
         assert!(Value::VarChar("a".into()) < Value::VarChar("b".into()));
         assert!(Value::Boolean(false) == Value::Boolean(false));
-        assert!(Value::Blob(vec![1, 2]) < Value::Blob(vec![1, 2, 3]));
+        assert!(Value::Blob(Rc::new([1, 2])) < Value::Blob(Rc::new([1, 2, 3])));
     }
 
     #[test]
