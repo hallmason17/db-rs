@@ -37,3 +37,8 @@ cargo run --bin db # tcp server
 cargo run --bin db-rs # small demo
 cargo bench
 ```
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (or later).
+See the [COPYING](COPYING) file for details.
