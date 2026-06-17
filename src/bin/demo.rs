@@ -51,10 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = db.create_table("users", &schema)?;
 
-    /*
     let mut tuples = vec![];
     for i in 0..100000 {
-        let tuple = Tuple::new(&[
+        let tuple = Tuple::new(vec![
             Value::Int(i),
             Value::VarChar(format!("mason{i}").into()),
             Value::VarChar(format!("masonh{i}@example.com").into()),
@@ -65,7 +64,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for tuple in &tuples {
         db.insert_record(table, &tuple.serialize(&schema))?;
     }
-    */
     let mut binder = Binder::new();
     let planner = Planner::new();
 
@@ -81,11 +79,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rows = executor.execute(plan)?;
     println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
 
-    /*
-        for row in rows {
-            println!("{row:?}");
-        }
-    */
+    for row in rows {
+        println!("{row:?}");
+    }
 
     Ok(())
 }

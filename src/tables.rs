@@ -162,8 +162,7 @@ impl Tuple {
 
     pub fn serialize(&self, schema: &TableSchema) -> Vec<u8> {
         let header_size = self.header_size();
-        let mut header_bytes = Vec::new();
-        header_bytes.reserve(header_size);
+        let mut header_bytes = Vec::with_capacity(header_size);
         let mut variable_bytes = Vec::new();
 
         let mut variable_byte_offset = header_size;

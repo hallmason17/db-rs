@@ -19,7 +19,6 @@ use std::borrow::Cow;
 use std::fmt::Display;
 
 use crate::tables::TupleRef;
-use crate::value::Value::{Blob, Boolean, Float, Int, Null, VarChar};
 use crate::value::ValueRef;
 use crate::{
     error::{Error, Result},

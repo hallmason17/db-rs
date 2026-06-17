@@ -19,13 +19,12 @@ use crate::error::Error::InvalidComparison;
 use crate::tables::TupleRef;
 use crate::value::ValueRef;
 use crate::{
-    error::{Error, Result},
+    error::Result,
     expr::Expr,
     ids::{PageId, TableId},
     page::{PageKind, SlottedPage},
     tables::{Table, Tuple},
     transaction::Transaction,
-    value::Value,
 };
 
 pub struct SeqScanExecutor<'a> {
@@ -79,8 +78,7 @@ impl<'a> SeqScanExecutor<'a> {
                 continue;
             }
             let match_output_schema = |tup: &Tuple| {
-                let mut vals = vec![];
-                vals.reserve(self.cols.len());
+                let mut vals = Vec::with_capacity(self.cols.len());
                 for expr in self.cols {
                     let val = expr.evaluate(Some(tup)).unwrap();
                     vals.push(val);
