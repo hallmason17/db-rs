@@ -67,6 +67,8 @@ pub enum Error {
 
     #[error("couldn't convert from utf8")]
     Utf8Conversion(#[from] FromUtf8Error),
+    #[error("couldn't convert to utf8")]
+    Utf8Error(#[from] Utf8Error),
 
     #[error("unknown error")]
     Unknown,

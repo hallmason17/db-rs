@@ -1,16 +1,32 @@
-use std::time::Instant;
-
+/* Copyright (C) 2026 Mason Hall.
+ *
+ * This file is part of db-rs.
+ *
+ * db-rs is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * db-rs is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * db-rs. If not, see <https://www.gnu.org/licenses/>.
+ */
 use db_rs::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
     execution::executor::Executor,
     planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema},
+    tables::{ColumnDefinition, TableSchema, Tuple},
     transaction::Transaction,
-    value::DataType,
+    value::{DataType, Value},
 };
 use sqlparser::parser::Parser;
+use std::time::Instant;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,37 +49,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let schema = TableSchema::new(&attributes);
 
-    let _table = db.create_table("users", &schema)?;
+    let table = db.create_table("users", &schema)?;
+
+    /*
+    let mut tuples = vec![];
+    for i in 0..100000 {
+        let tuple = Tuple::new(&[
+            Value::Int(i),
+            Value::VarChar(format!("mason{i}").into()),
+            Value::VarChar(format!("masonh{i}@example.com").into()),
+        ]);
+        tuples.push(tuple)
+    }
+
+    for tuple in &tuples {
+        db.insert_record(table, &tuple.serialize(&schema))?;
+    }
+    */
+    let mut binder = Binder::new();
+    let planner = Planner::new();
 
     let start = Instant::now();
 
-    /*
-        let mut tuples = vec![];
-        for i in 0..1000 {
-            let tuple = Tuple::new(&[
-                Value::Int(i),
-                Value::VarChar(format!("mason{i}")),
-                Value::VarChar(format!("masonh{i}@example.com")),
-            ]);
-            tuples.push(tuple,)
-        }
-
-        for tuple in &tuples {
-            db.insert_record(table, &tuple.serialize(&schema))?;
-        }
-    */
-
     let sql = "select id, name from users;";
     let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)?;
-    let mut binder = Binder::new();
     let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
-    let planner = Planner::new();
     let plan = planner.plan(bound);
     let txn = Transaction::new(&mut db);
     let executor = Executor::new(&txn);
 
     let rows = executor.execute(plan)?;
     println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
+
     /*
         for row in rows {
             println!("{row:?}");

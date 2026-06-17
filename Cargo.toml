@@ -9,6 +9,9 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+[profile.release]
+debug = 2
+
 [dev-dependencies]
 criterion = "0.8.2"
 tempfile = "3.27.0"

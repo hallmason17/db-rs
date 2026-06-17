@@ -28,6 +28,7 @@ fn setup_logger() {
     let fmt_layer = fmt::layer()
         .with_file(true)
         .with_line_number(true)
-        .with_target(false);
+        .with_target(false)
+        .with_filter(EnvFilter::from_default_env());
     tracing_subscriber::registry().with(fmt_layer).init();
 }

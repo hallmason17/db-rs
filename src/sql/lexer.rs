@@ -142,12 +142,10 @@ impl<'a> Lexer<'a> {
             '<' => {
                 if let Some(next) = self.peek() {
                     return match next {
-                        '>' => {
-                            Ok(self.atom(TokenType::NotEq, 2))
-                        }
+                        '>' => Ok(self.atom(TokenType::NotEq, 2)),
                         '=' => Ok(self.atom(TokenType::LessThanOrEq, 2)),
                         _ => Err(Error::ParseError("could not parse '<{next}'".into())),
-                    }
+                    };
                 }
                 Ok(self.atom(TokenType::LessThan, 1))
             }

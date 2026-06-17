@@ -31,13 +31,14 @@ use crate::{
     execution::executor::Executor,
     planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
+    tables::Tuple,
     transaction::Transaction,
 };
 
 #[derive(Debug)]
 pub struct Job {
     sql_string: String,
-    sender: mpsc::Sender<String>,
+    sender: mpsc::Sender<Vec<Tuple>>,
 }
 
 #[allow(dead_code)]
@@ -52,11 +53,7 @@ impl DbWorker {
             job_queue,
             db: Database::open(
                 path.clone(),
-                BufferPool::new(
-                    1024 * 16,
-                    ReplacementStrategy::Clock,
-                    StorageManager::new(&path)?,
-                )?,
+                BufferPool::new(128, ReplacementStrategy::Clock, StorageManager::new(&path)?)?,
             )?,
         })
     }
@@ -65,18 +62,21 @@ impl DbWorker {
         let planner = Planner::new();
         let mut binder = Binder::new();
         loop {
+            tracing::info!("Waiting for jobs!");
             let job = self.job_queue.recv()?;
             let start = Instant::now();
             let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job.sql_string)?;
-            let statement = binder.bind(ast.first().unwrap().clone(), &self.db)?;
-            let plan = planner.plan(statement);
-            let txn = Transaction::new(&mut self.db);
-            let executor = Executor::new(&txn);
-            let rows = executor.execute(plan)?;
-            for row in &rows {
-                job.sender.send(format!("{:?}", row))?;
+            if let Some(ast1) = ast.first() {
+                let statement = binder.bind(ast1.clone(), &self.db)?;
+                let plan = planner.plan(statement);
+                let txn = Transaction::new(&mut self.db);
+                let executor = Executor::new(&txn);
+                let rows = executor.execute(plan)?;
+                let len = rows.len();
+                let fin = start.elapsed();
+                job.sender.send(rows)?;
+                println!("Returned {} rows in {:?}", len, fin);
             }
-            println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
         }
     }
 }
@@ -92,7 +92,12 @@ impl Server {
         let (sender, receiver) = mpsc::channel();
         let worker_thread = Some(std::thread::spawn(move || {
             let mut dbworker = DbWorker::new(receiver).unwrap();
-            dbworker.run().unwrap()
+            loop {
+                let res = dbworker.run();
+                if res.is_err() {
+                    tracing::error!("{:?}", res);
+                }
+            }
         }));
         Ok(Self {
             job_queue: sender,
@@ -103,15 +108,17 @@ impl Server {
         mut stream: TcpStream,
         job_queue: mpsc::Sender<Job>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        tracing::debug!("handleconn()");
         let mut inputbuf = [0u8; 4096];
         let bytes = stream.read(&mut inputbuf)?;
         let (sender, receiver) = mpsc::channel();
-        job_queue.send(Job {
+        let job = Job {
             sql_string: String::from_utf8_lossy(&inputbuf[..bytes])
                 .trim()
                 .to_string(),
             sender,
-        })?;
+        };
+        job_queue.send(job)?;
         while let Ok(row) = receiver.recv() {
             let _ = stream.write(format!("{:?}\r\n", row).as_bytes())?;
         }
@@ -122,7 +129,6 @@ impl Server {
         tracing::info!("Listening on port: 6767");
         loop {
             let (stream, _) = listener.accept()?;
-            tracing::info!("{stream:#?}");
             let sender = self.job_queue.clone();
             std::thread::spawn(move || {
                 Self::handle_conn(stream, sender).unwrap();

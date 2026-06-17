@@ -60,9 +60,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_expr(&self, it: &mut Peekable<Iter<Token>>) -> Result<Ast> {
-        ./
-    }
+    fn parse_expr(&self, it: &mut Peekable<Iter<Token>>) -> Result<Ast> {}
 
     fn parse_select(&self, mut it: Peekable<Iter<Token>>) -> Result<Ast> {
         Ok(Ast::Select {

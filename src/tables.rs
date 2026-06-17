@@ -44,15 +44,86 @@ pub struct Record {
     pub data: Vec<u8>,
 }
 
+pub struct TupleRef<'a> {
+    bytes: &'a [u8],
+    schema: &'a TableSchema,
+}
+impl<'a> TupleRef<'a> {
+    pub fn new(bytes: &'a [u8], schema: &'a TableSchema) -> TupleRef<'a> {
+        TupleRef { bytes, schema }
+    }
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes
+    }
+
+    pub fn to_owned(self) -> Result<Tuple> {
+        Tuple::deserialize(self.bytes, self.schema)
+    }
+
+    pub fn get_attr(&self, idx: usize) -> Result<ValueRef<'a>> {
+        let mut pos = self.schema.attributes.len().div_ceil(8);
+        for (i, col) in self.schema.attributes.iter().enumerate() {
+            match col.data_type {
+                DataType::Boolean => {
+                    if i == idx {
+                        return Ok(ValueRef::Boolean(self.bytes[pos].try_into()?));
+                    }
+                    pos += 1;
+                }
+                DataType::Float => {
+                    if i == idx {
+                        return Ok(ValueRef::Float(f32::from_be_bytes(
+                            self.bytes[pos..pos + 4].try_into()?,
+                        )));
+                    }
+                    pos += 4;
+                }
+                DataType::Int => {
+                    if i == idx {
+                        return Ok(ValueRef::Int(i32::from_be_bytes(
+                            self.bytes[pos..pos + 4].try_into()?,
+                        )));
+                    }
+                    pos += 4;
+                }
+                DataType::VarChar => {
+                    if i == idx {
+                        let offset =
+                            u16::from_be_bytes(self.bytes[pos..pos + 2].try_into()?) as usize;
+                        pos += 2;
+                        let size =
+                            u16::from_be_bytes(self.bytes[pos..pos + 2].try_into()?) as usize;
+                        return Ok(ValueRef::VarChar(Cow::Borrowed(str::from_utf8(
+                            &self.bytes[offset..offset + size],
+                        )?)));
+                    }
+                    pos += 4;
+                }
+                DataType::Blob => {
+                    if i == idx {
+                        let offset =
+                            u16::from_be_bytes(self.bytes[pos..pos + 2].try_into()?) as usize;
+                        pos += 2;
+                        let size =
+                            u16::from_be_bytes(self.bytes[pos..pos + 2].try_into()?) as usize;
+                        return Ok(ValueRef::Blob(Cow::Borrowed(
+                            &self.bytes[offset..offset + size],
+                        )));
+                    }
+                    pos += 4;
+                }
+            }
+        }
+        Err(Error::Unknown)
+    }
+}
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tuple {
     pub values: Vec<Value>,
 }
 impl Tuple {
-    pub fn new(values: &[Value]) -> Self {
-        Self {
-            values: values.to_vec(),
-        }
+    pub fn new(values: Vec<Value>) -> Self {
+        Self { values }
     }
 
     pub fn header_size(&self) -> usize {
@@ -90,13 +161,17 @@ impl Tuple {
     }
 
     pub fn serialize(&self, schema: &TableSchema) -> Vec<u8> {
+        let header_size = self.header_size();
         let mut header_bytes = Vec::new();
+        header_bytes.reserve(header_size);
         let mut variable_bytes = Vec::new();
 
-        let mut variable_byte_offset = self.header_size();
+        let mut variable_byte_offset = header_size;
 
         let null_bitmap = self.gen_null_bitmap();
+
         header_bytes.extend_from_slice(&null_bitmap);
+        header_bytes.resize(self.values.len().div_ceil(8), 0);
 
         // Put the fixed-width values in the header and variable length ones in the variable_bytes
         // vec, track how big they are in the `offset` variable to put (offset, length) pairs in the header.
@@ -130,7 +205,7 @@ impl Tuple {
                     variable_byte_offset += len;
                 }
                 Value::Null => {
-                    header_bytes.extend_from_slice(&vec![0u8; col.data_type.size()]);
+                    header_bytes.resize(header_bytes.len() + col.data_type.size(), 0u8);
                 }
             }
         }
@@ -176,7 +251,7 @@ impl Tuple {
                     pos += 2;
                     let size = u16::from_be_bytes(bytes[pos..pos + 2].try_into()?) as usize;
                     pos += 2;
-                    values.push(Value::Blob(Rc::from(&bytes[offset..offset + size])));
+                    values.push(Value::Blob(Arc::from(&bytes[offset..offset + size])));
                 }
             }
         }
@@ -428,6 +503,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn get_attr_works() {
+        let attrs = vec![
+            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+        ];
+        let schema = TableSchema::new(&attrs);
+        let tuple = Tuple::new(vec![
+            Value::Int(1),
+            Value::VarChar("hello".into()),
+            Value::Float(5.0),
+            Value::Boolean(true),
+        ]);
+        let bytes = tuple.serialize(&schema);
+        let tuple_ref = TupleRef::new(&bytes, &schema);
+        let attr = tuple_ref.get_attr(0).unwrap();
+        let attr1 = tuple_ref.get_attr(1).unwrap();
+        let attr2 = tuple_ref.get_attr(2).unwrap();
+        let attr3 = tuple_ref.get_attr(3).unwrap();
+        assert_eq!(attr, ValueRef::Int(1));
+        assert_eq!(attr1, ValueRef::VarChar(Cow::Borrowed("hello")));
+        assert_eq!(attr2, ValueRef::Float(5.0));
+        assert_eq!(attr3, ValueRef::Boolean(true));
+    }
+
+    #[test]
     fn column_definition_roundtrip() {
         let col = ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap();
         let bytes = col.to_be_bytes().unwrap();
@@ -460,7 +562,7 @@ mod tests {
     fn tuple_serialize_int() {
         let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
         let schema = TableSchema::new(&[col]);
-        let tuple = Tuple::new(&[Value::Int(42)]);
+        let tuple = Tuple::new(vec![Value::Int(42)]);
         let bytes = tuple.serialize(&schema);
         // null bitmap (1 byte) + int (4 bytes) = 5 bytes
         assert_eq!(bytes.len(), 5);
@@ -472,7 +574,7 @@ mod tests {
     fn tuple_serialize_varchar() {
         let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
         let schema = TableSchema::new(&[col]);
-        let tuple = Tuple::new(&[Value::VarChar("hello".into())]);
+        let tuple = Tuple::new(vec![Value::VarChar("hello".into())]);
         let bytes = tuple.serialize(&schema);
         // null bitmap (1) + offset (2) + len (2) + data (5) = 10 bytes
         assert_eq!(bytes.len(), 10);
@@ -488,7 +590,7 @@ mod tests {
             ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
-        let tuple = Tuple::new(&[
+        let tuple = Tuple::new(vec![
             Value::Int(1),
             Value::VarChar("hello".into()),
             Value::Float(5.0),
@@ -510,7 +612,7 @@ mod tests {
     fn tuple_deserialize_int() {
         let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
         let schema = TableSchema::new(&[col]);
-        let tuple = Tuple::new(&[Value::Int(42)]);
+        let tuple = Tuple::new(vec![Value::Int(42)]);
         let bytes = tuple.serialize(&schema);
         let des_tuple = Tuple::deserialize(&bytes, &schema).unwrap();
         assert_eq!(tuple, des_tuple);
@@ -520,7 +622,7 @@ mod tests {
     fn tuple_deserialize_varchar() {
         let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
         let schema = TableSchema::new(&[col]);
-        let tuple = Tuple::new(&[Value::VarChar("hello".into())]);
+        let tuple = Tuple::new(vec![Value::VarChar("hello".into())]);
         let bytes = tuple.serialize(&schema);
         let des_tuple = Tuple::deserialize(&bytes, &schema).unwrap();
         assert_eq!(tuple, des_tuple);
@@ -535,7 +637,7 @@ mod tests {
             ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
-        let tuple = Tuple::new(&[
+        let tuple = Tuple::new(vec![
             Value::Int(1),
             Value::VarChar("hello".into()),
             Value::Float(5.0),
@@ -555,7 +657,7 @@ mod tests {
         ];
         let schema = TableSchema::new(&cols);
         // Second value is null
-        let tuple = Tuple::new(&[Value::Int(10), Value::Null, Value::Int(30)]);
+        let tuple = Tuple::new(vec![Value::Int(10), Value::Null, Value::Int(30)]);
         let bytes = tuple.serialize(&schema);
         // null bitmap (1 byte): bit 1 (0-indexed from MSB) should be set
         assert_eq!(bytes[0], 0b0100_0000);
@@ -571,7 +673,7 @@ mod tests {
             ColumnDefinition::new("gpa".into(), DataType::Float, false, false).unwrap(),
         ];
         let schema = TableSchema::new(&cols);
-        let tuple = Tuple::new(&[
+        let tuple = Tuple::new(vec![
             Value::Int(7),
             Value::VarChar("bob".into()),
             Value::Float(3.5),

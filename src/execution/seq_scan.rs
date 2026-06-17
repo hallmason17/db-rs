@@ -1,3 +1,23 @@
+/* Copyright (C) 2026 Mason Hall.
+ *
+ * This file is part of db-rs.
+ *
+ * db-rs is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * db-rs is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * db-rs. If not, see <https://www.gnu.org/licenses/>.
+ */
+use crate::error::Error::InvalidComparison;
+use crate::tables::TupleRef;
+use crate::value::ValueRef;
 use crate::{
     error::{Error, Result},
     expr::Expr,
@@ -44,8 +64,8 @@ impl<'a> SeqScanExecutor<'a> {
 
     pub fn next_tuple(&mut self) -> Result<Option<Tuple>> {
         while self.current_page < self.num_pages.unwrap() {
-            tracing::warn!(
-                "Page: {}, NumPages: {:?}",
+            tracing::debug!(
+                "Scanning Page: {}, NumPages: {:?}",
                 self.current_page,
                 self.num_pages
             );
@@ -60,43 +80,44 @@ impl<'a> SeqScanExecutor<'a> {
             }
             let match_output_schema = |tup: &Tuple| {
                 let mut vals = vec![];
+                vals.reserve(self.cols.len());
                 for expr in self.cols {
                     let val = expr.evaluate(Some(tup)).unwrap();
                     vals.push(val);
                 }
-                Tuple::new(&vals)
+                Tuple::new(vals)
             };
             let tuple = guard.with_heap(|heap| {
                 let num_entries = heap.num_entries();
                 while self.current_slot < num_entries {
-                    tracing::warn!("Slot: {}, NumSlots: {}", self.current_slot, num_entries);
                     let bytes = heap.get_slot(self.current_slot)?;
                     if bytes.is_none() {
                         return Ok(None);
                     }
-                    let tuple = Tuple::deserialize(bytes.unwrap(), &self.table.schema)?;
+                    let tuple = TupleRef::new(bytes.unwrap(), &self.table.schema);
                     if let Some(predicate) = self.filter {
-                        match predicate.evaluate(Some(&tuple))? {
-                            Value::Boolean(true) => {
+                        match predicate.evaluate_ref(Some(&tuple))? {
+                            ValueRef::Boolean(false) | ValueRef::Null => {}
+                            ValueRef::Boolean(true) => {
                                 self.current_slot += 1;
                                 if self.cols.is_empty() {
-                                    return Ok(Some(tuple));
+                                    return Ok(Some(tuple.to_owned()?));
                                 }
-                                return Ok(Some(match_output_schema(&tuple)));
+                                return Ok(Some(match_output_schema(&tuple.to_owned()?)));
                             }
-                            Value::Boolean(false) | Value::Null => {}
                             other => {
-                                return Err(Error::InvalidComparison(format!(
-                                    "filter returned {other:?}"
+                                return Err(InvalidComparison(format!(
+                                    "cannot valuate {:?}",
+                                    other
                                 )));
                             }
                         }
                     } else {
                         self.current_slot += 1;
                         if self.cols.is_empty() {
-                            return Ok(Some(tuple));
+                            return Ok(Some(tuple.to_owned()?));
                         }
-                        return Ok(Some(match_output_schema(&tuple)));
+                        return Ok(Some(match_output_schema(&tuple.to_owned()?)));
                     }
                     self.current_slot += 1;
                 }

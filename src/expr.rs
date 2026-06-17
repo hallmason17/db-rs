@@ -68,6 +68,123 @@ impl Display for Expr {
 }
 
 impl Expr {
+    pub fn evaluate_ref<'a>(&'a self, tuple: Option<&TupleRef<'a>>) -> Result<ValueRef<'a>> {
+        use ValueRef::*;
+        match self {
+            Self::And(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                // https://spark.apache.org/docs/4.1.2/sql-ref-null-semantics.html#logical-operators
+                (Boolean(l), Boolean(r)) => Ok(Boolean(l && r)),
+                (Boolean(b), Null) | (Null, Boolean(b)) => {
+                    if b {
+                        Ok(Null)
+                    } else {
+                        Ok(Boolean(b))
+                    }
+                }
+                (Null, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!(
+                    "cannot eval '{l} AND {r}'"
+                ))),
+            },
+            Self::AttrRef(r) => tuple.unwrap().get_attr(*r),
+            Self::Constant(c) => Ok(ValueRef::from_owned(c)),
+            Self::Equal(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Boolean(l), Boolean(r)) => Ok(Boolean(l == r)),
+                (Int(l), Int(r)) => Ok(Boolean(l == r)),
+                (Float(l), Float(r)) => Ok(Boolean(l == r)),
+                (Int(l), Float(r)) => Ok(Boolean(l as f32 == r)),
+                (Float(l), Int(r)) => Ok(Boolean(l == r as f32)),
+                (VarChar(l), VarChar(r)) => Ok(Boolean(l == r)),
+                (Blob(l), Blob(r)) => Ok(Boolean(l == r)),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} = {r}'"))),
+            },
+            Self::Or(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                // https://spark.apache.org/docs/4.1.2/sql-ref-null-semantics.html#logical-operators
+                (Boolean(l), Boolean(r)) => Ok(Boolean(l || r)),
+                (Boolean(b), Null) | (Null, Boolean(b)) => {
+                    if b {
+                        Ok(Boolean(b))
+                    } else {
+                        Ok(Null)
+                    }
+                }
+                (Null, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!(
+                    "cannot eval '{l} OR {r}'"
+                ))),
+            },
+            Self::GreaterThan(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Boolean(l), Boolean(r)) => Ok(Boolean(l & !r)),
+                (Int(l), Int(r)) => Ok(Boolean(l > r)),
+                (Float(l), Float(r)) => Ok(Boolean(l > r)),
+                (Int(l), Float(r)) => Ok(Boolean(l as f32 > r)),
+                (Float(l), Int(r)) => Ok(Boolean(l > r as f32)),
+                (VarChar(l), VarChar(r)) => Ok(Boolean(l > r)),
+                (Blob(l), Blob(r)) => Ok(Boolean(l > r)),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} > {r}'"))),
+            },
+            Self::LessThan(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Boolean(l), Boolean(r)) => Ok(Boolean(!l & r)),
+                (Int(l), Int(r)) => Ok(Boolean(l < r)),
+                (Float(l), Float(r)) => Ok(Boolean(l < r)),
+                (Int(l), Float(r)) => Ok(Boolean((l as f32) < r)),
+                (Float(l), Int(r)) => Ok(Boolean(l < (r as f32))),
+                (VarChar(l), VarChar(r)) => Ok(Boolean(l < r)),
+                (Blob(l), Blob(r)) => Ok(Boolean(l < r)),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} < {r}'"))),
+            },
+            Self::Not(r) => match r.evaluate_ref(tuple)? {
+                Boolean(b) => Ok(Boolean(!b)),
+                Null => Ok(Null),
+                _ => Err(Error::InvalidComparison(format!("cannot eval 'NOT {r}'"))),
+            },
+            Self::IsNull(r) => match r.evaluate_ref(tuple)? {
+                Null => Ok(Boolean(true)),
+                Boolean(_) | Int(_) | Float(_) | Blob(_) | VarChar(_) => Ok(Boolean(false)),
+            },
+            Self::IsNotNull(r) => match r.evaluate_ref(tuple)? {
+                Null => Ok(Boolean(false)),
+                Boolean(_) | Int(_) | Float(_) | Blob(_) | VarChar(_) => Ok(Boolean(true)),
+            },
+            Self::Like(_l, _r) => todo!(),
+            Self::Add(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l + r)),
+                (Float(l), Float(r)) => Ok(Float(l + r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) + r)),
+                (Float(l), Int(r)) => Ok(Float(l + (r as f32))),
+                (VarChar(l), VarChar(r)) => Ok(VarChar(Cow::Owned(format!("{}{}", l, r)))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} + {r}'"))),
+            },
+            Self::Subtract(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l - r)),
+                (Float(l), Float(r)) => Ok(Float(l - r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) - r)),
+                (Float(l), Int(r)) => Ok(Float(l - (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} - {r}'"))),
+            },
+            Self::Multiply(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l * r)),
+                (Float(l), Float(r)) => Ok(Float(l * r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) * r)),
+                (Float(l), Int(r)) => Ok(Float(l * (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} * {r}'"))),
+            },
+            Self::Divide(l, r) => match (l.evaluate_ref(tuple)?, r.evaluate_ref(tuple)?) {
+                (Int(l), Int(r)) => Ok(Int(l / r)),
+                (Float(l), Float(r)) => Ok(Float(l / r)),
+                (Int(l), Float(r)) => Ok(Float((l as f32) / r)),
+                (Float(l), Int(r)) => Ok(Float(l / (r as f32))),
+                (Null, _) | (_, Null) => Ok(Null),
+                (_, _) => Err(Error::InvalidComparison(format!("cannot eval '{l} / {r}'"))),
+            },
+        }
+    }
     pub fn evaluate(&self, tuple: Option<&Tuple>) -> Result<Value> {
         use Value::*;
         match self {
@@ -329,7 +446,7 @@ mod tests {
 
     #[test]
     fn basic_and() {
-        let tuple = Tuple::new(&[Value::Int(1), Value::Int(10)]);
+        let tuple = Tuple::new(vec![Value::Int(1), Value::Int(10)]);
         let expr = Expr::And(
             Box::new(Expr::Equal(
                 Box::new(Expr::AttrRef(1)),
@@ -374,8 +491,8 @@ mod tests {
             )),
         );
         let tuples = [
-            Tuple::new(&[Value::Int(1), Value::Int(10)]),
-            Tuple::new(&[Value::Int(2), Value::Int(10)]),
+            Tuple::new(vec![Value::Int(1), Value::Int(10)]),
+            Tuple::new(vec![Value::Int(2), Value::Int(10)]),
         ];
 
         let results = tuples
@@ -397,8 +514,8 @@ mod tests {
             )),
         );
         let tuples = [
-            Tuple::new(&[Value::Int(1), Value::Int(10)]),
-            Tuple::new(&[Value::Int(2), Value::Int(10)]),
+            Tuple::new(vec![Value::Int(1), Value::Int(10)]),
+            Tuple::new(vec![Value::Int(2), Value::Int(10)]),
         ];
 
         let results = tuples

@@ -48,13 +48,36 @@ impl DataType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueRef<'a> {
+    Int(i32),
+    VarChar(Cow<'a, str>),
+    Float(f32),
+    Boolean(bool),
+    Blob(Cow<'a, [u8]>),
+    Null,
+}
+
+impl<'a> ValueRef<'a> {
+    pub(crate) fn from_owned(v: &'a Value) -> ValueRef<'a> {
+        match v {
+            Value::Int(i) => ValueRef::Int(*i),
+            Value::VarChar(c) => ValueRef::VarChar(Cow::Borrowed(c)),
+            Value::Float(f) => ValueRef::Float(*f),
+            Value::Boolean(b) => ValueRef::Boolean(*b),
+            Value::Blob(b) => ValueRef::Blob(Cow::Borrowed(b)),
+            Value::Null => ValueRef::Null,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i32),
-    VarChar(Rc<str>),
+    VarChar(Arc<str>),
     Float(f32),
     Boolean(bool),
-    Blob(Rc<[u8]>),
+    Blob(Arc<[u8]>),
     Null,
 }
 impl Value {
@@ -158,7 +181,7 @@ mod tests {
         assert!(Value::Int(0) < Value::VarChar("".into()));
         assert!(Value::Float(std::f32::NEG_INFINITY) > Value::Null);
         assert!(Value::VarChar("a".into()) > Value::Int(9999));
-        assert!(Value::Blob(Rc::new([0])) > Value::Int(9999));
+        assert!(Value::Blob(Arc::new([0])) > Value::Int(9999));
     }
 
     #[test]
@@ -167,7 +190,7 @@ mod tests {
         assert!(Value::Float(1.5) > Value::Float(1.0));
         assert!(Value::VarChar("a".into()) < Value::VarChar("b".into()));
         assert!(Value::Boolean(false) == Value::Boolean(false));
-        assert!(Value::Blob(Rc::new([1, 2])) < Value::Blob(Rc::new([1, 2, 3])));
+        assert!(Value::Blob(Arc::new([1, 2])) < Value::Blob(Arc::new([1, 2, 3])));
     }
 
     #[test]

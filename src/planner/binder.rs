@@ -110,8 +110,9 @@ impl Binder {
                             | ast::Value::DoubleQuotedString(str) => {
                                 Ok(Expr::Constant(Value::VarChar(str.as_str().into())))
                             }
-                            _ => {
-                                todo!()
+                            other => {
+                                tracing::error!("Not implemented! {:?}", other);
+                                Err(ParseError("not implemented".into()))
                             }
                         };
                         exprs.push(expr?);
@@ -142,9 +143,19 @@ impl Binder {
                     Box::new(self.parse_expr(left, tables)?),
                     Box::new(self.parse_expr(right, tables)?),
                 )),
-                _ => {
-                    todo!()
-                }
+                ast::BinaryOperator::Or => Ok(Expr::Or(
+                    Box::new(self.parse_expr(left, tables)?),
+                    Box::new(self.parse_expr(right, tables)?),
+                )),
+                ast::BinaryOperator::Gt => Ok(Expr::GreaterThan(
+                    Box::new(self.parse_expr(left, tables)?),
+                    Box::new(self.parse_expr(right, tables)?),
+                )),
+                ast::BinaryOperator::Lt => Ok(Expr::LessThan(
+                    Box::new(self.parse_expr(left, tables)?),
+                    Box::new(self.parse_expr(right, tables)?),
+                )),
+                _ => Err(ParseError("not implemented".into())),
             },
             ast::Expr::Identifier(ident) => {
                 for table in tables {
@@ -172,13 +183,14 @@ impl Binder {
                 ast::Value::SingleQuotedString(str) | ast::Value::DoubleQuotedString(str) => {
                     Ok(Expr::Constant(Value::VarChar(str.as_str().into())))
                 }
-                _ => {
-                    todo!()
+                other => {
+                    tracing::error!("Not implemented! {:?}", other);
+                    Err(ParseError("not implemented".into()))
                 }
             },
-            _ => {
-                println!("{:?}", expr);
-                todo!()
+            other => {
+                tracing::error!("Not implemented! {:?}", other);
+                Err(ParseError("not implemented".into()))
             }
         }
     }
