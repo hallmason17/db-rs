@@ -17,7 +17,7 @@
  */
 use crate::error::Error::InvalidComparison;
 use crate::tables::TupleRef;
-use crate::value::ValueRef;
+use crate::value::{Value, ValueRef};
 use crate::{
     error::Result,
     expr::Expr,
@@ -77,13 +77,20 @@ impl<'a> SeqScanExecutor<'a> {
                 self.current_page += 1;
                 continue;
             }
-            let match_output_schema = |tup: &Tuple| {
-                let mut vals = Vec::with_capacity(self.cols.len());
-                for expr in self.cols {
-                    let val = expr.evaluate(Some(tup)).unwrap();
-                    vals.push(val);
-                }
-                Tuple::new(vals)
+            let match_output_schema = |tup_ref: &TupleRef| -> Result<Tuple> {
+                let vals: Vec<Value> = self
+                    .cols
+                    .iter()
+                    .map(|expr| match expr.evaluate_ref(Some(tup_ref))? {
+                        ValueRef::Int(i) => Ok(Value::Int(i)),
+                        ValueRef::Float(f) => Ok(Value::Float(f)),
+                        ValueRef::Boolean(b) => Ok(Value::Boolean(b)),
+                        ValueRef::VarChar(cow) => Ok(Value::VarChar(cow.into_owned().into())),
+                        ValueRef::Blob(cow) => Ok(Value::Blob(cow.into_owned().into())),
+                        ValueRef::Null => Ok(Value::Null),
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(Tuple::new(vals))
             };
             let tuple = guard.with_heap(|heap| {
                 let num_entries = heap.num_entries();
@@ -92,16 +99,19 @@ impl<'a> SeqScanExecutor<'a> {
                     if bytes.is_none() {
                         return Ok(None);
                     }
-                    let tuple = TupleRef::new(bytes.unwrap(), &self.table.schema);
+                    let tuple_ref = TupleRef::new(bytes.unwrap(), &self.table.schema);
                     if let Some(predicate) = self.filter {
-                        match predicate.evaluate_ref(Some(&tuple))? {
+                        match predicate.evaluate_ref(Some(&tuple_ref))? {
                             ValueRef::Boolean(false) | ValueRef::Null => {}
                             ValueRef::Boolean(true) => {
                                 self.current_slot += 1;
+
+                                // Wildcard
                                 if self.cols.is_empty() {
-                                    return Ok(Some(tuple.to_owned()?));
+                                    return Ok(Some(tuple_ref.to_owned()?));
                                 }
-                                return Ok(Some(match_output_schema(&tuple.to_owned()?)));
+
+                                return Ok(Some(match_output_schema(&tuple_ref)?));
                             }
                             other => {
                                 return Err(InvalidComparison(format!(
@@ -112,10 +122,12 @@ impl<'a> SeqScanExecutor<'a> {
                         }
                     } else {
                         self.current_slot += 1;
+
+                        // Wildcard
                         if self.cols.is_empty() {
-                            return Ok(Some(tuple.to_owned()?));
+                            return Ok(Some(tuple_ref.to_owned()?));
                         }
-                        return Ok(Some(match_output_schema(&tuple.to_owned()?)));
+                        return Ok(Some(match_output_schema(&tuple_ref)?));
                     }
                     self.current_slot += 1;
                 }

@@ -39,9 +39,6 @@ pub struct FileInfo {
     pub metadata: PageFileFooter,
 }
 
-#[derive(Debug)]
-pub struct StorageState {}
-
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct StorageManager {
@@ -216,25 +213,33 @@ impl StorageManager {
 
             // Update footer
             fileinfo.metadata.num_pages += 1;
-            fileinfo.file.seek(SeekFrom::End(0))?;
-            tracing::debug!("updating footer: {:?}", fileinfo);
-            _ = fileinfo.file.write(&fileinfo.metadata.to_be_bytes())?;
+            StorageManager::write_footer(fileinfo)?;
 
             return Ok(fileinfo.metadata.num_pages - 1);
         }
         Err(Error::FileNotFound)
     }
 
-    // TODO: Dont call `append_empty_block` in a loop. Instead, do it all at once... we know how
-    // big it needs to be.
+    fn write_footer(file_info: &FileInfo) -> Result<()> {
+        file_info.file.write_at(
+            &file_info.metadata.to_be_bytes(),
+            PAGE_SIZE as u64 * file_info.metadata.num_pages + 1,
+        )?;
+        Ok(())
+    }
+
     pub fn ensure_capacity(&mut self, file_id: FileId, number_of_pages: u64) -> Result<()> {
-        let mut num_pages = match self.files.get(&file_id) {
-            Some(info) => info.metadata.num_pages,
+        let file_info = match self.files.get_mut(&file_id) {
+            Some(info) => info,
             None => return Err(Error::FileNotFound),
         };
-        while num_pages < number_of_pages {
-            self.append_empty_block(file_id)?;
-            num_pages = self.files.get(&file_id).unwrap().metadata.num_pages;
+        let file_size = file_info.file.metadata()?.len();
+        let needed = (number_of_pages + 1) * PAGE_SIZE as u64;
+
+        if needed > file_size {
+            file_info.file.set_len(needed)?;
+            file_info.metadata.num_pages = number_of_pages;
+            StorageManager::write_footer(file_info)?;
         }
         Ok(())
     }

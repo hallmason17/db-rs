@@ -80,14 +80,6 @@ impl CatalogEntry {
     }
 }
 
-pub trait Catalog {
-    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()>;
-    fn get_schema(&self, name: &str) -> Option<&TableSchema>;
-    fn list_tables(&self) -> Vec<String>;
-    fn get_table(&self, name: &str) -> Option<&CatalogEntry>;
-    fn drop_table(&mut self) -> Result<()>;
-}
-
 #[derive(Debug)]
 pub struct CatalogManager {
     tables: HashMap<String, CatalogEntry>,
@@ -124,32 +116,30 @@ impl CatalogManager {
     pub fn entries(&self) -> Vec<&CatalogEntry> {
         self.tables.values().collect::<Vec<&CatalogEntry>>()
     }
-}
 
-impl Catalog for CatalogManager {
-    fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()> {
+    pub fn create_table(&mut self, catalog_entry: &CatalogEntry) -> Result<()> {
         self.tables
             .insert(catalog_entry.table_name.clone(), catalog_entry.clone());
 
         Ok(())
     }
 
-    fn get_schema(&self, name: &str) -> Option<&TableSchema> {
+    pub fn get_schema(&self, name: &str) -> Option<&TableSchema> {
         match self.tables.get(name) {
             Some(entry) => Some(&entry.schema),
             None => None,
         }
     }
 
-    fn list_tables(&self) -> Vec<String> {
+    pub fn list_tables(&self) -> Vec<String> {
         self.tables.keys().map(String::from).collect::<Vec<_>>()
     }
 
-    fn get_table(&self, name: &str) -> Option<&CatalogEntry> {
+    pub fn get_table(&self, name: &str) -> Option<&CatalogEntry> {
         self.tables.get(name)
     }
 
-    fn drop_table(&mut self) -> Result<()> {
+    pub fn drop_table(&mut self) -> Result<()> {
         todo!()
     }
 }

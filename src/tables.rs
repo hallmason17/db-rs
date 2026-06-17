@@ -216,9 +216,18 @@ impl Tuple {
     pub fn deserialize(bytes: &[u8], schema: &TableSchema) -> Result<Self> {
         let mut values = Vec::with_capacity(schema.attributes.len());
         let bitmap_size = schema.attributes.len().div_ceil(8);
-        let _bitmap = &bytes[..bitmap_size];
+        let bitmap = &bytes[..bitmap_size];
+        let is_value_null = |bitmap: &[u8], idx: usize| {
+            let byte = idx / 8;
+            (bitmap[byte] >> (7 - idx % 8)) & 1 == 1
+        };
         let mut pos = bitmap_size;
-        for attr in &schema.attributes {
+        for (i, attr) in schema.attributes.iter().enumerate() {
+            if is_value_null(bitmap, i) {
+                values.push(Value::Null);
+                pos += attr.data_type.size();
+                continue;
+            }
             match attr.data_type {
                 DataType::Int => {
                     values.push(Value::Int(i32::from_be_bytes(

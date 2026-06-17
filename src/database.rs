@@ -24,7 +24,7 @@ use std::{
 use crate::{
     CATALOG_PAGE_ID,
     buffer_pool::BufferPool,
-    catalog::{Catalog, CatalogEntry, CatalogManager},
+    catalog::{CatalogEntry, CatalogManager},
     error::Result,
     ids::{FileId, TableId},
     page::SlottedPageMut,

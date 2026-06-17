@@ -27,16 +27,11 @@ use crate::{
     storage::StorageManager,
 };
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum ReplacementStrategy {
-    Fifo,
     Clock,
-    Lru(u32),
-    Lfu,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub(crate) data: RefCell<[u8; PAGE_SIZE]>,
@@ -81,7 +76,6 @@ impl Default for Frame {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct PageGuard<'pg> {
     pub page_id: PageId,
     frame: &'pg Frame,
@@ -170,14 +164,12 @@ impl BufferPool {
         None
     }
 
-    // TODO: First look to evict dirty pages.
     fn select_victim(&self) -> Option<FrameNum> {
         if let Some(frame) = self.free_frames.borrow_mut().pop() {
             Some(frame as FrameNum)
         } else {
             match self.replacement_strategy {
                 ReplacementStrategy::Clock => self.select_victim_clock(),
-                _ => None,
             }
         }
     }
