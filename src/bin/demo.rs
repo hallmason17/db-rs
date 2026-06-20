@@ -21,9 +21,9 @@ use db_rs::{
     execution::executor::Executor,
     planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema, Tuple},
+    tables::{ColumnDefinition, TableSchema},
     transaction::Transaction,
-    value::{DataType, Value},
+    value::DataType,
 };
 use sqlparser::parser::Parser;
 use std::time::Instant;
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let schema = TableSchema::new(&attributes);
 
-    let table = db.create_table("users", &schema)?;
+    let _ = db.create_table("users", &schema)?;
 
     let mut binder = Binder::new();
     let planner = Planner::new();
@@ -60,10 +60,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         for i in 0..1000 {
             let insert = format!(
-                "INSERT INTO users (id, name, email) VALUES ({},'{}','{}');",
-                i,
-                format!("mason{}", i),
-                format!("mason{}@example.com", i)
+                "INSERT INTO users (id, name, email) VALUES ({},'mason{}','mason{}@example.com');",
+                i, i, i
             );
             println!("{}", insert);
             let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &insert)?;
@@ -89,9 +87,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rows = executor.execute(plan)?;
     println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
 
-    for row in rows {
-        //  println!("{row:?}");
-    }
+    /*
+        for row in rows {
+            println!("{row:?}");
+        }
+    */
 
     Ok(())
 }
