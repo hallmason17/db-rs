@@ -27,6 +27,7 @@ use db_rs::{
 };
 use sqlparser::parser::Parser;
 use std::time::Instant;
+use tempdir::TempDir;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,11 +37,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Run with RUST_LOG=log_level to see logs."
     );
 
-    let base_path = std::env::current_dir().unwrap();
+    let base_path = TempDir::new("db-rs")?;
+    println!("Creating db at {:?}", base_path);
 
-    let sm = StorageManager::new(base_path.as_path()).unwrap();
+    let sm = StorageManager::new(base_path.path()).unwrap();
     let bp = BufferPool::new(1024, ReplacementStrategy::Clock, sm)?;
-    let mut db = Database::open(base_path.clone(), bp)?;
+    let mut db = Database::open(base_path.path().into(), bp)?;
 
     let attributes = vec![
         ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
@@ -56,22 +58,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let insert_start = Instant::now();
     {
-        let mut txn = Transaction::new(&mut db);
-        for i in 0..100000 {
-            let tuple = Tuple::new(vec![
-                Value::Int(i),
-                Value::VarChar(format!("mason{i}").into()),
-                Value::VarChar(format!("masonh{i}@example.com").into()),
-            ]);
-            let record = tuple.serialize(&schema);
-            txn.insert(table, &record)?;
+        for i in 0..1000 {
+            let insert = format!(
+                "INSERT INTO users (id, name, email) VALUES ({},'{}','{}');",
+                i,
+                format!("mason{}", i),
+                format!("mason{}@example.com", i)
+            );
+            println!("{}", insert);
+            let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &insert)?;
+            let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
+            let plan = planner.plan(bound);
+            let mut txn = Transaction::new(&mut db);
+            let mut executor = Executor::new(&mut txn);
+            let _ = executor.execute(plan)?;
         }
     }
-    println!("Inserted 100000 rows in {:?}", insert_start.elapsed());
+    println!("Inserted 1000 rows in {:?}", insert_start.elapsed());
 
     let start = Instant::now();
 
-    let sql = "select id, name from users;";
+    let sql = "select id, name from users where (id < 1000) and (name < 'mason5');";
+    println!("{}", sql);
     let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)?;
     let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
     let plan = planner.plan(bound);
@@ -82,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
 
     for row in rows {
-        println!("{row:?}");
+        //  println!("{row:?}");
     }
 
     Ok(())
