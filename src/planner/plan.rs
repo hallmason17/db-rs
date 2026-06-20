@@ -27,6 +27,10 @@ pub enum SqlStatement {
         tables: Vec<Table>,
         filter: Option<Expr>,
     },
+    Insert {
+        table: Table,
+        values: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -38,7 +42,7 @@ pub enum SortOrder {
 #[derive(Debug)]
 pub enum QueryPlan {
     CreateTable { schema: TableSchema },
-    Insert,
+    Insert { table: Table, values: Vec<Expr> },
     Update,
     Delete,
     Select(PlanNode),
@@ -77,6 +81,7 @@ impl Planner {
                 table: tables.first().unwrap().clone(),
                 filter,
             }),
+            SqlStatement::Insert { table, values } => QueryPlan::Insert { table, values },
         }
     }
 }

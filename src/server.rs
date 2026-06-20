@@ -69,8 +69,8 @@ impl DbWorker {
             if let Some(ast1) = ast.first() {
                 let statement = binder.bind(ast1.clone(), &self.db)?;
                 let plan = planner.plan(statement);
-                let txn = Transaction::new(&mut self.db);
-                let executor = Executor::new(&txn);
+                let mut txn = Transaction::new(&mut self.db);
+                let mut executor = Executor::new(&mut txn);
                 let rows = executor.execute(plan)?;
                 let len = rows.len();
                 let fin = start.elapsed();

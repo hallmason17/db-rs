@@ -16,4 +16,5 @@
  * db-rs. If not, see <https://www.gnu.org/licenses/>.
  */
 pub mod executor;
+pub mod insert;
 pub mod seq_scan;

@@ -24,18 +24,14 @@ use crate::{
     buffer_pool::BufferPool,
     error::{Error, InputError, Result},
     ids::{FileId, TableId},
-    page::{
-        PAGE_SIZE, PageAccessor, PageHeaderReader, PageKind, SlotArrayEntry, SlottedPageMut,
-        page_header_offsets,
-    },
+    page::{PageAccessor, PageHeaderReader, PageKind, SlottedPageMut},
     value::{DataType, Value},
 };
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RecordId {
-    page: u64,
-    slot: u16,
+    pub page: u64,
+    pub slot: u16,
 }
 
 #[allow(dead_code)]
@@ -379,59 +375,6 @@ impl TableSchema {
     }
 }
 
-pub struct HeapStorage<'a> {
-    table: &'a mut Table,
-    bp: &'a mut BufferPool,
-}
-
-impl<'a> HeapStorage<'a> {
-    pub fn new(table: &'a mut Table, bp: &'a mut BufferPool) -> Self {
-        Self { table, bp }
-    }
-
-    fn try_insert_into_page(&mut self, page_num: u64, record: &[u8]) -> Result<RecordId> {
-        let mut page = if let Ok(page) = self.bp.get_page(PageId {
-            file_id: self.table.file_id,
-            page_num,
-        }) {
-            page
-        } else {
-            self.bp.create_page(self.table.file_id, PageKind::Heap)?
-        };
-        self.table.current_heap_page = page.page_id.page_num;
-
-        let rid = page.with_heap_mut(|heap| match heap.insert(record) {
-            Ok(slot) => Ok(RecordId {
-                page: slot.page,
-                slot: slot.slot,
-            }),
-            Err(e) => Err(e),
-        })?;
-
-        Ok(rid)
-    }
-
-    fn handle_full_page(&mut self) -> Result<()> {
-        let guard = self.bp.create_page(self.table.file_id, PageKind::Heap)?;
-        self.table.current_heap_page = guard.page_id.page_num;
-        Ok(())
-    }
-
-    pub fn insert_record(&mut self, record: &[u8]) -> Result<RecordId> {
-        if record.len() > PAGE_SIZE - page_header_offsets::SIZE - size_of::<SlotArrayEntry>() {
-            return Err(Error::InputError(InputError::RecordTooLarge));
-        }
-
-        loop {
-            match self.try_insert_into_page(self.table.current_heap_page, record) {
-                Ok(rid) => return Ok(rid),
-                Err(Error::PageFull) => self.handle_full_page()?,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -439,7 +382,7 @@ pub struct Table {
     pub file_id: FileId,
     pub name: String,
     pub schema: TableSchema,
-    current_heap_page: u64,
+    pub(crate) current_heap_page: u64,
 }
 impl Table {
     pub fn new(
@@ -498,11 +441,6 @@ impl Table {
             schema: schema.clone(),
             current_heap_page: 1,
         }
-    }
-
-    pub fn insert(&mut self, record: &[u8], bp: &mut BufferPool) -> Result<RecordId> {
-        let mut storage = HeapStorage::new(self, bp);
-        storage.insert_record(record)
     }
 }
 

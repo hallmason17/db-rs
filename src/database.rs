@@ -29,7 +29,7 @@ use crate::{
     ids::{FileId, TableId},
     page::SlottedPageMut,
     storage::StorageManager,
-    tables::{ColumnDefinition, RecordId, Table, TableSchema},
+    tables::{ColumnDefinition, Table, TableSchema},
     transaction::Transaction,
     value::DataType,
 };
@@ -157,12 +157,6 @@ impl Database {
         let table = Table::new(name, schema, &mut self.buffer_manager, fid)?;
         self.tables.insert(TableId(fid.0), table);
         Ok(self.tables.get(&TableId(fid.0)).unwrap().table_id)
-    }
-
-    pub fn insert_record(&mut self, table_id: TableId, record: &[u8]) -> Result<RecordId> {
-        let table = self.tables.get_mut(&table_id).unwrap();
-        let rid = table.insert(record, &mut self.buffer_manager)?;
-        Ok(rid)
     }
 
     pub fn get_table(&self, name: &str) -> Option<&Table> {

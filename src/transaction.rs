@@ -16,8 +16,13 @@
  * db-rs. If not, see <https://www.gnu.org/licenses/>.
  */
 use crate::{
-    database::Database, error::Result, execution::seq_scan::SeqScanExecutor, expr::Expr,
-    ids::TableId, tables::Tuple,
+    database::Database,
+    error::Result,
+    execution::insert::InsertExecutor,
+    execution::seq_scan::SeqScanExecutor,
+    expr::Expr,
+    ids::TableId,
+    tables::{RecordId, Tuple},
 };
 
 pub struct Transaction<'a> {
@@ -35,5 +40,9 @@ impl Transaction<'_> {
             tuples.push(tuple);
         }
         Ok(tuples)
+    }
+
+    pub fn insert(&mut self, table_id: TableId, record: &[u8]) -> Result<RecordId> {
+        InsertExecutor::new(&mut *self.db, table_id, record.to_vec()).execute()
     }
 }

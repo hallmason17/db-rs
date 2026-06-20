@@ -51,21 +51,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = db.create_table("users", &schema)?;
 
-    let mut tuples = vec![];
-    for i in 0..100000 {
-        let tuple = Tuple::new(vec![
-            Value::Int(i),
-            Value::VarChar(format!("mason{i}").into()),
-            Value::VarChar(format!("masonh{i}@example.com").into()),
-        ]);
-        tuples.push(tuple)
-    }
-
-    for tuple in &tuples {
-        db.insert_record(table, &tuple.serialize(&schema))?;
-    }
     let mut binder = Binder::new();
     let planner = Planner::new();
+
+    let insert_start = Instant::now();
+    {
+        let mut txn = Transaction::new(&mut db);
+        for i in 0..100000 {
+            let tuple = Tuple::new(vec![
+                Value::Int(i),
+                Value::VarChar(format!("mason{i}").into()),
+                Value::VarChar(format!("masonh{i}@example.com").into()),
+            ]);
+            let record = tuple.serialize(&schema);
+            txn.insert(table, &record)?;
+        }
+    }
+    println!("Inserted 100000 rows in {:?}", insert_start.elapsed());
 
     let start = Instant::now();
 
@@ -73,8 +75,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)?;
     let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
     let plan = planner.plan(bound);
-    let txn = Transaction::new(&mut db);
-    let executor = Executor::new(&txn);
+    let mut txn = Transaction::new(&mut db);
+    let mut executor = Executor::new(&mut txn);
 
     let rows = executor.execute(plan)?;
     println!("Returned {:?} rows in {:?}", rows.len(), start.elapsed());
