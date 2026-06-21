@@ -12,7 +12,6 @@ pub mod ids;
 pub mod page;
 pub mod planner;
 pub mod server;
-pub mod sql;
 pub mod storage;
 pub mod tables;
 pub mod transaction;

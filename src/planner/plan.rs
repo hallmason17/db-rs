@@ -18,6 +18,10 @@ pub enum SqlStatement {
         table: Table,
         values: Vec<Expr>,
     },
+    CreateTable {
+        name: String,
+        schema: TableSchema,
+    },
 }
 
 #[derive(Debug)]
@@ -28,7 +32,7 @@ pub enum SortOrder {
 
 #[derive(Debug)]
 pub enum QueryPlan {
-    CreateTable { schema: TableSchema },
+    CreateTable { name: String, schema: TableSchema },
     Insert { table: Table, values: Vec<Expr> },
     Update,
     Delete,
@@ -69,6 +73,7 @@ impl Planner {
                 filter,
             }),
             SqlStatement::Insert { table, values } => QueryPlan::Insert { table, values },
+            SqlStatement::CreateTable { name, schema } => QueryPlan::CreateTable { name, schema },
         }
     }
 }

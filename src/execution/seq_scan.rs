@@ -50,11 +50,6 @@ impl<'a> SeqScanExecutor<'a> {
 
     pub fn next_tuple(&mut self) -> Result<Option<Tuple>> {
         while self.current_page < self.num_pages.unwrap() {
-            tracing::debug!(
-                "Scanning Page: {}, NumPages: {:?}",
-                self.current_page,
-                self.num_pages
-            );
             let guard = self.txn.db.buffer_manager.get_page(PageId {
                 file_id: self.table.file_id,
                 page_num: self.current_page,

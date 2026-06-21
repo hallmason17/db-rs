@@ -4,7 +4,7 @@
  */
 use crate::{
     error::{Error, Result},
-    execution::insert::InsertExecutor,
+    execution::{create_table::CreateTableExecutor, insert::InsertExecutor},
     planner::plan::{PlanNode::SeqScan, QueryPlan},
     tables::Tuple,
     transaction::Transaction,
@@ -38,6 +38,12 @@ impl Executor<'_> {
                 let mut insert_executor =
                     InsertExecutor::new(&mut *self.txn.db, table.table_id, record);
                 insert_executor.execute()?;
+                vec![]
+            }
+            QueryPlan::CreateTable { name, schema } => {
+                let mut create_table_executor =
+                    CreateTableExecutor::new(&mut self.txn.db, &name, &schema);
+                create_table_executor.execute()?;
                 vec![]
             }
             _ => return Err(Error::Unknown),

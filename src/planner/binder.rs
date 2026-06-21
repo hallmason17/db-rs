@@ -7,11 +7,11 @@ use crate::{
     error::{Error, Result},
     expr::Expr,
     planner::plan::SqlStatement,
-    tables::Table,
-    value::Value,
+    tables::{ColumnDefinition, Table, TableSchema},
+    value::{DataType, Value},
 };
 use sqlparser::ast::{
-    self, BinaryOperator, Ident, Query, SelectItem, SetExpr, Statement, TableFactor,
+    self, BinaryOperator, ColumnDef, Ident, Query, SelectItem, SetExpr, Statement, TableFactor,
     TableWithJoins, UnaryOperator,
 };
 
@@ -63,10 +63,50 @@ impl Binder {
 
                 Ok(SqlStatement::Insert { table, values })
             }
+            Statement::CreateTable(create) => {
+                let name = create.name.to_string();
+                let columns = create
+                    .columns
+                    .iter()
+                    .map(|e| self.parse_col(e))
+                    .collect::<Result<Vec<_>>>()?;
+                let schema = TableSchema::new(&columns);
+                tracing::debug!("CREATE TABLE {}, schema: \n{:?}", name, schema);
+                Ok(SqlStatement::CreateTable { name, schema })
+            }
             other => Err(Error::ParseError(format!(
                 "unsupported SQL statement: {other:?}"
             ))),
         }
+    }
+
+    fn parse_col(&self, col_def: &ColumnDef) -> Result<ColumnDefinition> {
+        let datatype = match &col_def.data_type {
+            ast::DataType::Varchar(_) => DataType::VarChar,
+            ast::DataType::Int32 | ast::DataType::Int(_) => DataType::Int,
+            ast::DataType::Float32 | ast::DataType::Float(_) => DataType::Float,
+            ast::DataType::Blob(_) | ast::DataType::Binary(_) => DataType::Blob,
+            other => {
+                return Err(Error::ParseError(format!(
+                    "Datatype {} not supported",
+                    other
+                )));
+            }
+        };
+        let is_key = col_def
+            .options
+            .iter()
+            .any(|o| matches!(o.option, ast::ColumnOption::PrimaryKey(_)));
+        let is_nullable = !col_def
+            .options
+            .iter()
+            .any(|o| matches!(o.option, ast::ColumnOption::NotNull));
+        Ok(ColumnDefinition::new(
+            col_def.name.clone().to_string(),
+            datatype,
+            is_key,
+            is_nullable,
+        )?)
     }
 
     fn parse_select_ast(&self, select_ast: &ast::Select, db: &Database) -> Result<SqlStatement> {

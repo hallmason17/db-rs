@@ -8,9 +8,7 @@ use db_rs::{
     execution::executor::Executor,
     planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
-    tables::{ColumnDefinition, TableSchema},
     transaction::Transaction,
-    value::DataType,
 };
 use sqlparser::parser::Parser;
 use std::time::Instant;
@@ -31,17 +29,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bp = BufferPool::new(1024, ReplacementStrategy::Clock, sm)?;
     let mut db = Database::open(base_path.path().into(), bp)?;
 
-    let attributes = vec![
-        ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
-        ColumnDefinition::new(String::from("name"), DataType::VarChar, false, true)?,
-        ColumnDefinition::new(String::from("email"), DataType::VarChar, true, false)?,
-    ];
-    let schema = TableSchema::new(&attributes);
+    let create_sql =
+        "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), email VARCHAR(50) NOT NULL);";
 
-    let _ = db.create_table("users", &schema)?;
+    println!("{}", create_sql);
+
+    // let attributes = vec![
+    //     ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
+    //     ColumnDefinition::new(String::from("name"), DataType::VarChar, false, true)?,
+    //     ColumnDefinition::new(String::from("email"), DataType::VarChar, true, false)?,
+    // ];
+    // let schema = TableSchema::new(&attributes);
+
+    // let _ = db.create_table("users", &schema)?;
 
     let mut binder = Binder::new();
     let planner = Planner::new();
+
+    let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, create_sql)?;
+    let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;
+    let plan = planner.plan(bound);
+    let mut txn = Transaction::new(&mut db);
+    let mut executor = Executor::new(&mut txn);
+    let _ = executor.execute(plan);
 
     let insert_start = Instant::now();
     {

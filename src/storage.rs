@@ -155,7 +155,7 @@ impl StorageManager {
     }
 
     pub fn read_block(&self, page_id: &PageId, page_handle: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        tracing::warn!("READ page={} file={}", page_id.page_num, page_id.file_id);
+        tracing::trace!("READ page={} file={}", page_id.page_num, page_id.file_id);
         if let Some(fileinfo) = self.files.get(&page_id.file_id) {
             if page_id.page_num >= fileinfo.metadata.num_pages {
                 return Err(Error::PageNotFound);
@@ -170,7 +170,7 @@ impl StorageManager {
     }
 
     pub fn write_block(&mut self, page_id: &PageId, page_handle: &[u8; PAGE_SIZE]) -> Result<()> {
-        tracing::warn!("WRITE page={} file={}", page_id.page_num, page_id.file_id);
+        tracing::trace!("WRITE page={} file={}", page_id.page_num, page_id.file_id);
         // Make sure file exists.
         if !self.files.contains_key(&page_id.file_id) {
             return Err(Error::FileNotFound);
