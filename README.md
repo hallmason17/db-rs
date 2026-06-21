@@ -74,7 +74,6 @@ cargo build
 cargo test
 cargo run --bin demo # small demo
 cargo run --bin db # tcp server
-cargo bench
 ```
 
 ## License
