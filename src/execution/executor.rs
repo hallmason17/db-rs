@@ -42,7 +42,7 @@ impl Executor<'_> {
             }
             QueryPlan::CreateTable { name, schema } => {
                 let mut create_table_executor =
-                    CreateTableExecutor::new(&mut self.txn.db, &name, &schema);
+                    CreateTableExecutor::new(self.txn.db, &name, &schema);
                 create_table_executor.execute()?;
                 vec![]
             }

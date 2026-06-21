@@ -101,12 +101,12 @@ impl Binder {
             .options
             .iter()
             .any(|o| matches!(o.option, ast::ColumnOption::NotNull));
-        Ok(ColumnDefinition::new(
+        ColumnDefinition::new(
             col_def.name.clone().to_string(),
             datatype,
             is_key,
             is_nullable,
-        )?)
+        )
     }
 
     fn parse_select_ast(&self, select_ast: &ast::Select, db: &Database) -> Result<SqlStatement> {
