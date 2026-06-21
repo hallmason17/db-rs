@@ -53,9 +53,12 @@ impl DbWorker {
             let job = self.job_queue.recv()?;
             let start = Instant::now();
             let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job.sql_string)?;
+            tracing::debug!("Parsed SQL: {:?}", ast);
             if let Some(ast1) = ast.first() {
                 let statement = binder.bind(ast1.clone(), &self.db)?;
+                tracing::debug!("Bound statement: {:?}", statement);
                 let plan = planner.plan(statement);
+                tracing::debug!("Generated plan: {:?}", plan);
                 let mut txn = Transaction::new(&mut self.db);
                 let mut executor = Executor::new(&mut txn);
                 let rows = executor.execute(plan)?;
@@ -79,10 +82,12 @@ impl Server {
         let (sender, receiver) = mpsc::channel();
         let worker_thread = Some(std::thread::spawn(move || {
             let mut dbworker = DbWorker::new(receiver).unwrap();
+            tracing::info!("Worker thread started");
             loop {
                 let res = dbworker.run();
                 if res.is_err() {
                     tracing::error!("{:?}", res);
+                    tracing::info!("Worker thread encountered error, continuing");
                 }
             }
         }));
@@ -95,7 +100,7 @@ impl Server {
         mut stream: TcpStream,
         job_queue: mpsc::Sender<Job>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::debug!("handleconn()");
+        tracing::debug!("handleconn() start");
         let mut inputbuf = [0u8; 4096];
         let bytes = stream.read(&mut inputbuf)?;
         let (sender, receiver) = mpsc::channel();
@@ -109,13 +114,15 @@ impl Server {
         while let Ok(row) = receiver.recv() {
             let _ = stream.write(format!("{:?}\r\n", row).as_bytes())?;
         }
+        tracing::debug!("handleconn() finished");
         Ok(())
     }
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind("127.0.0.1:6767")?;
         tracing::info!("Listening on port: 6767");
         loop {
-            let (stream, _) = listener.accept()?;
+            let (stream, addr) = listener.accept()?;
+            tracing::info!("Accepted connection from {}", addr);
             let sender = self.job_queue.clone();
             std::thread::spawn(move || {
                 Self::handle_conn(stream, sender).unwrap();

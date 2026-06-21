@@ -53,7 +53,6 @@ impl PageGuard<'_> {
                 page.header().kind(),
                 expected
             );
-            tracing::error!("Data: {:?}", page.data);
             return Err(Error::PageCast);
         }
         Ok(page)

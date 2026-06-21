@@ -155,6 +155,7 @@ impl BufferPool {
         if let Some(frame) = self.free_frames.borrow_mut().pop() {
             Some(frame as FrameNum)
         } else {
+            tracing::debug!("Selecting eviction victim!");
             match self.replacement_strategy {
                 ReplacementStrategy::Clock => self.select_victim_clock(),
             }
@@ -162,7 +163,11 @@ impl BufferPool {
     }
     fn evict_page(&self, frame_num: FrameNum) -> Result<()> {
         let frame = &self.frames[usize::try_from(frame_num)?];
-        tracing::warn!("EVICTING FRAME: {}, {:?}", frame_num, frame.state.borrow());
+        tracing::debug!(
+            "EVICTING FRAME: {}, (page {:?})",
+            frame_num,
+            frame.state.borrow().page_id
+        );
         let state = &mut frame.state.borrow_mut();
         assert!(state.pin_count == 0);
         let page_num = state.page_id;
@@ -183,10 +188,12 @@ impl BufferPool {
 
     pub fn get_page(&self, page_id: PageId) -> Result<PageGuard<'_>> {
         if let Some(frame_num) = self.find_entry_in_map(page_id) {
+            tracing::debug!("Cache hit for page {:?} in frame {}", page_id, frame_num);
             let frame = &self.frames[usize::try_from(frame_num)?];
             frame.pin();
             Ok(PageGuard { frame, page_id })
         } else if let Some(frame_index) = self.select_victim() {
+            tracing::debug!("Cache miss for page {:?}, loading from disk", page_id);
             self.evict_page(frame_index as FrameNum)?;
             let frame = &self.frames[usize::try_from(frame_index)?];
             {
@@ -229,6 +236,7 @@ impl BufferPool {
                 .storage_manager
                 .borrow_mut()
                 .get_next_page_id(file_id)?;
+            tracing::debug!("Creating new page ID {} of kind {:?}", page_num, kind);
             tracing::debug!("next page id: {}", page_num);
             self.evict_page(frame_index as FrameNum)?;
 

@@ -19,6 +19,7 @@ impl Executor<'_> {
 
     #[allow(clippy::collapsible_match)]
     pub fn execute(&mut self, plan: QueryPlan) -> Result<Vec<Tuple>> {
+        tracing::debug!("Executing plan: {:?}", plan);
         let tuples = match plan {
             QueryPlan::Select(node) => match node {
                 SeqScan {

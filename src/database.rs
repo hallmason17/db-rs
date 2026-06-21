@@ -110,7 +110,9 @@ impl Database {
 
     pub fn create_table(&mut self, name: &str, schema: &TableSchema) -> Result<TableId> {
         let path = self.base_path.join(format!("{name}.db"));
+        tracing::info!("Creating table {} at path {}", name, path.display());
         if let Some(fid) = self.table_names.get(name) {
+            tracing::info!("Table {} already exists with ID {}", name, fid.0);
             return Ok(*fid);
         }
         if path.exists() {
@@ -137,11 +139,16 @@ impl Database {
             schema: schema.clone(),
         };
 
+        tracing::info!(
+            "Inserting catalog entry for table {:?}",
+            &catalog_entry.table_name
+        );
         self.update_catalog(catalog_entry)?;
 
         self.table_names.insert(String::from(name), TableId(fid.0));
 
         let table = Table::new(name, schema, &mut self.buffer_manager, fid)?;
+        tracing::info!("Table {} created with ID {}", name, fid.0);
         self.tables.insert(TableId(fid.0), table);
         Ok(self.tables.get(&TableId(fid.0)).unwrap().table_id)
     }

@@ -29,7 +29,14 @@ impl<'a> InsertExecutor<'a> {
     pub fn execute(&mut self) -> Result<RecordId> {
         let table = self.db.tables.get_mut(&self.table_id).unwrap();
         let bp = &mut self.db.buffer_manager;
-        insert_record(table, bp, &self.record)
+        let rid = insert_record(table, bp, &self.record)?;
+        tracing::debug!(
+            "Inserted record into table {} at page={} and slot={}",
+            self.table_id.0,
+            rid.page,
+            rid.slot
+        );
+        Ok(rid)
     }
 }
 
@@ -62,6 +69,11 @@ fn try_insert_into_page(
 
 fn handle_full_page(table: &mut Table, bp: &mut BufferPool) -> Result<()> {
     let guard = bp.create_page(table.file_id, PageKind::Heap)?;
+    tracing::debug!(
+        "Page {} full, allocating new heap page {}",
+        table.current_heap_page,
+        guard.page_id.page_num
+    );
     table.current_heap_page = guard.page_id.page_num;
     Ok(())
 }

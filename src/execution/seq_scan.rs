@@ -55,7 +55,7 @@ impl<'a> SeqScanExecutor<'a> {
                 page_num: self.current_page,
             })?;
             if guard.kind() != PageKind::Heap {
-                tracing::warn!("Not a heap page, continuing");
+                tracing::trace!("Not a heap page, continuing");
                 self.current_page += 1;
                 continue;
             }

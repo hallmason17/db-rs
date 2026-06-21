@@ -62,6 +62,7 @@ impl Planner {
         Self {}
     }
     pub fn plan(&self, statement: SqlStatement) -> QueryPlan {
+        tracing::debug!("Planning statement: {:?}", statement);
         match statement {
             SqlStatement::Select {
                 cols,

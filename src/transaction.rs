@@ -17,10 +17,17 @@ pub struct Transaction<'a> {
 }
 impl Transaction<'_> {
     pub fn new(db: &mut Database) -> Transaction<'_> {
+        tracing::info!("Starting new transaction on DB");
         Transaction { db }
     }
 
     pub fn scan(&self, table: TableId, cols: &[Expr], filter: Option<Expr>) -> Result<Vec<Tuple>> {
+        tracing::debug!(
+            "Scanning table ID {:?} with cols {:?} and filter {:?}",
+            table,
+            cols,
+            filter
+        );
         let mut tuples = vec![];
         let mut scan = SeqScanExecutor::new(self, table, cols, &filter);
         while let Some(tuple) = scan.next_tuple()? {
@@ -30,6 +37,11 @@ impl Transaction<'_> {
     }
 
     pub fn insert(&mut self, table_id: TableId, record: &[u8]) -> Result<RecordId> {
+        tracing::debug!(
+            "Inserting into table ID {:?} record len {:?}",
+            table_id,
+            record.len()
+        );
         InsertExecutor::new(&mut *self.db, table_id, record.to_vec()).execute()
     }
 }

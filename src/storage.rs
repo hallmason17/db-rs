@@ -105,6 +105,7 @@ impl StorageManager {
     /// Opens a db file and returns a file_id
     pub fn open_or_create_file(&mut self, path: &Path) -> Result<FileId> {
         if let Some(fid) = self.paths.get(path) {
+            tracing::debug!("Opening existing file {} with ID {}", path.display(), fid);
             return Ok(*fid);
         }
         let mut file = OpenOptions::new()
@@ -141,6 +142,7 @@ impl StorageManager {
         }
 
         let file_id = self.next_id;
+        tracing::debug!("Created new file {} with ID {}", path.display(), file_id);
         self.paths.insert(path.to_path_buf(), file_id);
         self.files.insert(
             file_id,
@@ -216,6 +218,11 @@ impl StorageManager {
     }
 
     pub fn ensure_capacity(&mut self, file_id: FileId, number_of_pages: u64) -> Result<()> {
+        tracing::debug!(
+            "Ensuring capacity for file {:?} up to page {}",
+            file_id,
+            number_of_pages
+        );
         let file_info = match self.files.get_mut(&file_id) {
             Some(info) => info,
             None => return Err(Error::FileNotFound),
@@ -224,6 +231,11 @@ impl StorageManager {
         let needed = (number_of_pages + 1) * PAGE_SIZE as u64;
 
         if needed > file_size {
+            tracing::debug!(
+                "Extending file {:?} to {} pages",
+                file_id,
+                needed / PAGE_SIZE as u64
+            );
             file_info.file.set_len(needed)?;
             file_info.metadata.num_pages = number_of_pages;
             StorageManager::write_footer(file_info)?;
