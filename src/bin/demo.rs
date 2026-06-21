@@ -19,7 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
     println!(
         "Insert + seq scan demo.
-        Run with RUST_LOG=log_level to see logs."
+        Run with RUST_LOG=log_level to see logs.
+        Ex: RUST_LOG=info cargo r --bin demo"
     );
 
     let base_path = TempDir::new("db-rs")?;
@@ -33,15 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), email VARCHAR(50) NOT NULL);";
 
     println!("{}", create_sql);
-
-    // let attributes = vec![
-    //     ColumnDefinition::new(String::from("id"), DataType::Int, true, false)?,
-    //     ColumnDefinition::new(String::from("name"), DataType::VarChar, false, true)?,
-    //     ColumnDefinition::new(String::from("email"), DataType::VarChar, true, false)?,
-    // ];
-    // let schema = TableSchema::new(&attributes);
-
-    // let _ = db.create_table("users", &schema)?;
 
     let mut binder = Binder::new();
     let planner = Planner::new();
@@ -57,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         for i in 0..1000 {
             let insert = format!(
-                "INSERT INTO users (id, name, email) VALUES ({},'mason{}','mason{}@example.com');",
+                "INSERT INTO users (id, name, email) VALUES ({},'example{}','ex{}@example.com');",
                 i, i, i
             );
             println!("{}", insert);
@@ -73,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
 
-    let sql = "select id, name from users where (id < 1000) and (name < 'mason5');";
+    let sql = "select id, name from users where (id < 1000) and (name < 'example5');";
     println!("{}", sql);
     let parsed = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)?;
     let bound = binder.bind(parsed.first().unwrap().clone(), &db)?;

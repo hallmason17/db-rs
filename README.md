@@ -8,23 +8,24 @@ The project is under active development.
 ### The Demo
 The project includes a small demo showing some of the basic features. You can run it with `cargo r --bin demo`. It initializes a database in a temp directory and creates a table, inserts records into it, and runs a basic `SELECT` query and returns output like the following:
 
-``` bash
-
+```console
+	Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+	 Running `target/debug/demo`
 Insert + seq scan demo.
 		Run with RUST_LOG=log_level to see logs.
-Creating db at TempDir { path: "/tmp/db-rs.RCuXGwvSPz6Y" }
+		Ex: RUST_LOG=info cargo r --bin demo
+Creating db at TempDir { path: "/tmp/db-rs.NAXYPxAMBBGb" }
 CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), email VARCHAR(50) NOT NULL);
-INSERT INTO users (id, name, email) VALUES (0,'mason0','mason0@example.com');
-INSERT INTO users (id, name, email) VALUES (1,'mason1','mason1@example.com');
-INSERT INTO users (id, name, email) VALUES (2,'mason2','mason2@example.com');
-INSERT INTO users (id, name, email) VALUES (3,'mason3','mason3@example.com');
+INSERT INTO users (id, name, email) VALUES (0,'example0','ex0@example.com');
+INSERT INTO users (id, name, email) VALUES (1,'example1','ex1@example.com');
+INSERT INTO users (id, name, email) VALUES (2,'example2','ex2@example.com');
 ...
-INSERT INTO users (id, name, email) VALUES (997,'mason997','mason997@example.com');
-INSERT INTO users (id, name, email) VALUES (998,'mason998','mason998@example.com');
-INSERT INTO users (id, name, email) VALUES (999,'mason999','mason999@example.com');
-Inserted 1000 rows in 25.485745ms
-select id, name from users where (id < 1000) and (name < 'mason5');
-Returned 445 rows in 996.503µs
+INSERT INTO users (id, name, email) VALUES (997,'example997','ex997@example.com');
+INSERT INTO users (id, name, email) VALUES (998,'example998','ex998@example.com');
+INSERT INTO users (id, name, email) VALUES (999,'example999','ex999@example.com');
+Inserted 1000 rows in 25.512492ms
+select id, name from users where (id < 1000) and (name < 'example5');
+Returned 445 rows in 991.213µs
 ```
 
 ### TCP Server
@@ -33,12 +34,12 @@ There is also a binary included to run the database behind a TCP server (similar
 
 There is no included client application at the moment. In the meantime, I've been interacting with it via `nc` like so (I currently just return the Rust "Debug" output for tuples):
 
-``` bash
-~/repos/db-rs echo "create table demo1 (id int, col1 varchar not null, col2 float);" | nc localhost 6767
+```console
+~/db-rs echo "create table demo1 (id int, col1 varchar not null, col2 float);" | nc localhost 6767
 []
-~/repos/db-rs echo "insert into demo1 (id, col1, col2) values(1,'asdf', 1.0);" | nc localhost 6767
+~/db-rs echo "insert into demo1 (id, col1, col2) values(1,'asdf', 1.0);" | nc localhost 6767
 []
-~/repos/db-rs echo "select * from demo1;" | nc localhost 6767
+~/db-rs echo "select * from demo1;" | nc localhost 6767
 [Tuple { values: [Int(1), VarChar("asdf"), Float(1.0)] }]
 ```
 
