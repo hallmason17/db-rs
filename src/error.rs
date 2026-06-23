@@ -66,6 +66,7 @@ pub enum InputError {
     StringTooLong,
     OutOfBounds,
     RecordTooLarge,
+    TupleDoesntMatchSchema,
 }
 impl std::fmt::Display for InputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -74,6 +75,9 @@ impl std::fmt::Display for InputError {
             Self::StringTooLong => write!(f, "string exceeds maximum length"),
             Self::RecordTooLarge => {
                 write!(f, "record exceeds maximum length (page_size - header_size)")
+            }
+            Self::TupleDoesntMatchSchema => {
+                write!(f, "The given tuple doesn't match the table schema!")
             }
         }
     }

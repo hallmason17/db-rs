@@ -3,7 +3,7 @@
  * GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
  */
 use crate::{
-    error::{Error, Result},
+    error::{Error, InputError, Result},
     execution::{create_table::CreateTableExecutor, insert::InsertExecutor},
     planner::plan::{PlanNode::SeqScan, QueryPlan},
     tables::Tuple,
@@ -35,6 +35,9 @@ impl Executor<'_> {
                     .map(|e| e.evaluate(None))
                     .collect::<Result<_>>()?;
                 let tuple = Tuple::new(vals);
+                if !table.schema.is_valid_tuple(&tuple) {
+                    return Err(Error::InputError(InputError::TupleDoesntMatchSchema).into());
+                }
                 let record = tuple.serialize(&table.schema);
                 let mut insert_executor =
                     InsertExecutor::new(&mut *self.txn.db, table.table_id, record);
