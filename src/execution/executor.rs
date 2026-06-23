@@ -36,7 +36,7 @@ impl Executor<'_> {
                     .collect::<Result<_>>()?;
                 let tuple = Tuple::new(vals);
                 if !table.schema.is_valid_tuple(&tuple) {
-                    return Err(Error::InputError(InputError::TupleDoesntMatchSchema).into());
+                    return Err(Error::InputError(InputError::TupleDoesntMatchSchema));
                 }
                 let record = tuple.serialize(&table.schema);
                 let mut insert_executor =
