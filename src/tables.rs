@@ -285,7 +285,7 @@ impl ColumnDefinition {
 
     pub fn from_be_bytes(bytes: &[u8]) -> Result<(Self, usize)> {
         let mut data = bytes;
-        let mut len = 4;
+        let mut len = 3;
         let name_len = data[0] as usize;
         data = &data[1..];
         let name = String::from_utf8_lossy(&data[..name_len]);
@@ -450,10 +450,10 @@ mod tests {
     #[test]
     fn get_attr_works() {
         let attrs = vec![
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
-            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
-            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
         let tuple = Tuple::new(vec![
@@ -476,22 +476,21 @@ mod tests {
 
     #[test]
     fn column_definition_roundtrip() {
-        let col = ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap();
+        let col = ColumnDefinition::new("id".into(), DataType::Int, false).unwrap();
         let bytes = col.to_be_bytes().unwrap();
         let (decoded, _) = ColumnDefinition::from_be_bytes(&bytes).unwrap();
         assert_eq!(col.name, decoded.name);
         assert_eq!(col.data_type as u8, decoded.data_type as u8);
-        assert_eq!(col.is_key, decoded.is_key);
         assert_eq!(col.is_nullable, decoded.is_nullable);
     }
 
     #[test]
     fn table_schema_roundtrip() {
         let attrs = vec![
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
-            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
-            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
         let bytes = schema.to_be_bytes().unwrap();
@@ -505,7 +504,7 @@ mod tests {
 
     #[test]
     fn tuple_serialize_int() {
-        let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
+        let col = ColumnDefinition::new("val".into(), DataType::Int, false).unwrap();
         let schema = TableSchema::new(&[col]);
         let tuple = Tuple::new(vec![Value::Int(42)]);
         let bytes = tuple.serialize(&schema);
@@ -517,7 +516,7 @@ mod tests {
 
     #[test]
     fn tuple_serialize_varchar() {
-        let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
+        let col = ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap();
         let schema = TableSchema::new(&[col]);
         let tuple = Tuple::new(vec![Value::VarChar("hello".into())]);
         let bytes = tuple.serialize(&schema);
@@ -529,10 +528,10 @@ mod tests {
     #[test]
     fn tuple_serialize_mixed() {
         let attrs = vec![
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
-            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
-            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
         let tuple = Tuple::new(vec![
@@ -555,7 +554,7 @@ mod tests {
 
     #[test]
     fn tuple_deserialize_int() {
-        let col = ColumnDefinition::new("val".into(), DataType::Int, false, false).unwrap();
+        let col = ColumnDefinition::new("val".into(), DataType::Int, false).unwrap();
         let schema = TableSchema::new(&[col]);
         let tuple = Tuple::new(vec![Value::Int(42)]);
         let bytes = tuple.serialize(&schema);
@@ -565,7 +564,7 @@ mod tests {
 
     #[test]
     fn tuple_deserialize_varchar() {
-        let col = ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap();
+        let col = ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap();
         let schema = TableSchema::new(&[col]);
         let tuple = Tuple::new(vec![Value::VarChar("hello".into())]);
         let bytes = tuple.serialize(&schema);
@@ -576,10 +575,10 @@ mod tests {
     #[test]
     fn tuple_deserialize_mixed() {
         let attrs = vec![
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
-            ColumnDefinition::new("score".into(), DataType::Float, false, false).unwrap(),
-            ColumnDefinition::new("active".into(), DataType::Boolean, false, false).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+            ColumnDefinition::new("score".into(), DataType::Float, false).unwrap(),
+            ColumnDefinition::new("active".into(), DataType::Boolean, false).unwrap(),
         ];
         let schema = TableSchema::new(&attrs);
         let tuple = Tuple::new(vec![
@@ -596,9 +595,9 @@ mod tests {
     #[test]
     fn tuple_serialize_null_bitmap() {
         let cols = vec![
-            ColumnDefinition::new("a".into(), DataType::Int, false, true).unwrap(),
-            ColumnDefinition::new("b".into(), DataType::Int, false, true).unwrap(),
-            ColumnDefinition::new("c".into(), DataType::Int, false, true).unwrap(),
+            ColumnDefinition::new("a".into(), DataType::Int, true).unwrap(),
+            ColumnDefinition::new("b".into(), DataType::Int, true).unwrap(),
+            ColumnDefinition::new("c".into(), DataType::Int, true).unwrap(),
         ];
         let schema = TableSchema::new(&cols);
         // Second value is null
@@ -613,9 +612,9 @@ mod tests {
     #[test]
     fn tuple_serialize_mixed_types() {
         let cols = vec![
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
-            ColumnDefinition::new("gpa".into(), DataType::Float, false, false).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+            ColumnDefinition::new("gpa".into(), DataType::Float, false).unwrap(),
         ];
         let schema = TableSchema::new(&cols);
         let tuple = Tuple::new(vec![

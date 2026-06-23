@@ -355,8 +355,8 @@ mod tests {
         let bp = BufferPool::new(16, ReplacementStrategy::Clock, sm).unwrap();
         let mut db = Database::open(dir.path().into(), bp).unwrap();
         let schema = TableSchema::new(&[
-            ColumnDefinition::new("id".into(), DataType::Int, true, false).unwrap(),
-            ColumnDefinition::new("name".into(), DataType::VarChar, false, true).unwrap(),
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
         ]);
         db.create_table("users", &schema).unwrap();
         (dir, db)
