@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum DataType {
     Int,

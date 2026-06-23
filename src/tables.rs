@@ -259,18 +259,16 @@ impl Tuple {
 pub struct ColumnDefinition {
     pub name: String,
     pub data_type: DataType,
-    pub is_key: bool,
     pub is_nullable: bool,
 }
 impl ColumnDefinition {
-    pub fn new(name: String, data_type: DataType, is_key: bool, is_nullable: bool) -> Result<Self> {
+    pub fn new(name: String, data_type: DataType, is_nullable: bool) -> Result<Self> {
         if name.len() > u8::MAX as usize {
             return Err(Error::InputError(InputError::StringTooLong));
         }
         Ok(Self {
             name,
             data_type,
-            is_key,
             is_nullable,
         })
     }
@@ -280,7 +278,7 @@ impl ColumnDefinition {
         bytes.extend_from_slice(&name_len.to_be_bytes());
         bytes.extend_from_slice(self.name.as_bytes());
         bytes.push(self.data_type as u8);
-        bytes.push(u8::from(self.is_key));
+        // bytes.push(u8::from(self.is_key));
         bytes.push(u8::from(self.is_nullable));
         Ok(bytes)
     }
@@ -295,15 +293,15 @@ impl ColumnDefinition {
         data = &data[name_len..];
         let data_type = DataType::from_u8(data[0]);
         data = &data[1..];
-        let is_key = match data[0] {
-            0 => false,
-            1 => true,
-            _ => {
-                eprintln!("Casting {} to a bool?", data[0]);
-                unreachable!()
-            }
-        };
-        data = &data[1..];
+        // let is_key = match data[0] {
+        //     0 => false,
+        //     1 => true,
+        //     _ => {
+        //         eprintln!("Casting {} to a bool?", data[0]);
+        //         unreachable!()
+        //     }
+        // };
+        // data = &data[1..];
         let is_nullable = match data[0] {
             0 => false,
             1 => true,
@@ -316,7 +314,6 @@ impl ColumnDefinition {
             Self {
                 name: name.to_string(),
                 data_type,
-                is_key,
                 is_nullable,
             },
             len,
@@ -359,6 +356,21 @@ impl TableSchema {
             attrs.push(attr);
         }
         Ok(Self { attributes: attrs })
+    }
+
+    pub fn is_valid_tuple(&self, tuple: &Tuple) -> bool {
+        if self.attributes.len() != tuple.values.len() {
+            return false;
+        }
+        for (attr, val) in self.attributes.iter().zip(&tuple.values) {
+            if val.datatype().unwrap() != attr.data_type {
+                return false;
+            }
+            if val.datatype().is_none() && !attr.is_nullable {
+                return false;
+            }
+        }
+        true
     }
 }
 

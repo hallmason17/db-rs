@@ -20,12 +20,12 @@ INSERT INTO users (id, name, email) VALUES (0,'example0','ex0@example.com');
 INSERT INTO users (id, name, email) VALUES (1,'example1','ex1@example.com');
 INSERT INTO users (id, name, email) VALUES (2,'example2','ex2@example.com');
 ...
-INSERT INTO users (id, name, email) VALUES (997,'example997','ex997@example.com');
-INSERT INTO users (id, name, email) VALUES (998,'example998','ex998@example.com');
-INSERT INTO users (id, name, email) VALUES (999,'example999','ex999@example.com');
-Inserted 1000 rows in 25.512492ms
+INSERT INTO users (id, name, email) VALUES (97,'example97','ex97@example.com');
+INSERT INTO users (id, name, email) VALUES (98,'example98','ex98@example.com');
+INSERT INTO users (id, name, email) VALUES (99,'example99','ex99@example.com');
+Inserted 100 rows in 2.541292ms
 select id, name from users where (id < 1000) and (name < 'example5');
-Returned 445 rows in 991.213µs
+Returned 45 rows in 180.205µs
 ```
 
 ### TCP Server

@@ -27,19 +27,16 @@ fn get_catalog_schema() -> TableSchema {
             ColumnDefinition {
                 name: String::from("table_name"),
                 data_type: DataType::VarChar,
-                is_key: true,
                 is_nullable: false,
             },
             ColumnDefinition {
                 name: String::from("file_name"),
                 data_type: DataType::VarChar,
-                is_key: true,
                 is_nullable: false,
             },
             ColumnDefinition {
                 name: String::from("schema"),
                 data_type: DataType::Blob,
-                is_key: false,
                 is_nullable: false,
             },
         ],

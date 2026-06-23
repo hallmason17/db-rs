@@ -93,7 +93,7 @@ impl Binder {
                 )));
             }
         };
-        let is_key = col_def
+        let _is_key = col_def
             .options
             .iter()
             .any(|o| matches!(o.option, ast::ColumnOption::PrimaryKey(_)));
@@ -101,12 +101,7 @@ impl Binder {
             .options
             .iter()
             .any(|o| matches!(o.option, ast::ColumnOption::NotNull));
-        ColumnDefinition::new(
-            col_def.name.clone().to_string(),
-            datatype,
-            is_key,
-            is_nullable,
-        )
+        ColumnDefinition::new(col_def.name.clone().to_string(), datatype, is_nullable)
     }
 
     fn parse_select_ast(&self, select_ast: &ast::Select, db: &Database) -> Result<SqlStatement> {

@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let insert_start = Instant::now();
     {
-        for i in 0..1000 {
+        for i in 0..100 {
             let insert = format!(
                 "INSERT INTO users (id, name, email) VALUES ({},'example{}','ex{}@example.com');",
                 i, i, i
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = executor.execute(plan)?;
         }
     }
-    println!("Inserted 1000 rows in {:?}", insert_start.elapsed());
+    println!("Inserted 100 rows in {:?}", insert_start.elapsed());
 
     let start = Instant::now();
 
