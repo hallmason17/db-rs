@@ -16,7 +16,7 @@ pub enum Error {
     #[error("Int conversion error: ")]
     IntConversion(#[from] TryFromIntError),
 
-    #[error("Io error:")]
+    #[error("Io error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("page not found")]
@@ -37,7 +37,7 @@ pub enum Error {
     #[error("corrupt page file")]
     CorruptPageFile,
 
-    #[error("Input error: ")]
+    #[error("Input error: {0}")]
     InputError(#[from] InputError),
 
     #[error("no pages available")]
@@ -49,7 +49,7 @@ pub enum Error {
     #[error("invalid comparison")]
     InvalidComparison(String),
 
-    #[error("parse error")]
+    #[error("parse error: {0}")]
     ParseError(String),
 
     #[error("couldn't convert from utf8")]

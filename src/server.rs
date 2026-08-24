@@ -15,6 +15,7 @@ use sqlparser::parser::Parser;
 use crate::{
     buffer_pool::{BufferPool, ReplacementStrategy},
     database::Database,
+    error::{Error, Result},
     execution::executor::Executor,
     planner::{binder::Binder, plan::Planner},
     storage::StorageManager,
@@ -25,7 +26,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Job {
     sql_string: String,
-    sender: mpsc::Sender<Vec<Tuple>>,
+    sender: mpsc::Sender<Result<Vec<Tuple>>>,
 }
 
 #[allow(dead_code)]
@@ -34,7 +35,7 @@ pub struct DbWorker {
     db: Database,
 }
 impl DbWorker {
-    pub fn new(job_queue: mpsc::Receiver<Job>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(job_queue: mpsc::Receiver<Job>) -> Result<Self> {
         let path = std::env::current_dir()?;
         Ok(Self {
             job_queue,
@@ -45,30 +46,49 @@ impl DbWorker {
         })
     }
 
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let planner = Planner::new();
-        let mut binder = Binder::new();
+    pub fn run(&mut self) -> Result<()> {
         loop {
             tracing::info!("Waiting for jobs!");
-            let job = self.job_queue.recv()?;
+            let job = match self.job_queue.recv() {
+                Ok(job) => job,
+                Err(_) => {
+                    tracing::info!("job queue closed, worker shutting down");
+                    return Ok(());
+                }
+            };
             let start = Instant::now();
-            let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, &job.sql_string)?;
-            tracing::debug!("Parsed SQL: {:?}", ast);
-            if let Some(ast1) = ast.first() {
-                let statement = binder.bind(ast1.clone(), &self.db)?;
-                tracing::debug!("Bound statement: {:?}", statement);
-                let plan = planner.plan(statement);
-                tracing::debug!("Generated plan: {:?}", plan);
-                let mut txn = Transaction::new(&mut self.db);
-                let mut executor = Executor::new(&mut txn);
-                let rows = executor.execute(plan)?;
-                let len = rows.len();
-                let fin = start.elapsed();
-                job.sender.send(rows)?;
-                println!("Returned {} rows in {:?}", len, fin);
+            let result = execute_sql(&mut self.db, &job.sql_string);
+            match &result {
+                Ok(rows) => {
+                    println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
+                }
+                Err(e) => {
+                    tracing::error!("query failed: {e}");
+                }
+            }
+            if let Err(e) = job.sender.send(result) {
+                tracing::error!("failed to send query result to client: {e}");
             }
         }
     }
+}
+
+fn execute_sql(db: &mut Database, sql: &str) -> Result<Vec<Tuple>> {
+    let planner = Planner::new();
+    let mut binder = Binder::new();
+    let ast = Parser::parse_sql(&sqlparser::dialect::GenericDialect {}, sql)
+        .map_err(|e| Error::ParseError(e.to_string()))?;
+    tracing::debug!("Parsed SQL: {:?}", ast);
+    let Some(statement) = ast.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let statement = binder.bind(statement, db)?;
+    tracing::debug!("Bound statement: {:?}", statement);
+    let plan = planner.plan(statement);
+    tracing::debug!("Generated plan: {:?}", plan);
+    let mut txn = Transaction::new(db);
+    let mut executor = Executor::new(&mut txn);
+    executor.execute(plan)
 }
 
 #[allow(dead_code)]
@@ -78,17 +98,19 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let worker_thread = Some(std::thread::spawn(move || {
-            let mut dbworker = DbWorker::new(receiver).unwrap();
-            tracing::info!("Worker thread started");
-            loop {
-                let res = dbworker.run();
-                if res.is_err() {
-                    tracing::error!("{:?}", res);
-                    tracing::info!("Worker thread encountered error, continuing");
+            let mut dbworker = match DbWorker::new(receiver) {
+                Ok(worker) => worker,
+                Err(e) => {
+                    tracing::error!("failed to start database worker: {e}");
+                    return;
                 }
+            };
+            tracing::info!("Worker thread started");
+            if let Err(e) = dbworker.run() {
+                tracing::error!("worker stopped: {e}");
             }
         }));
         Ok(Self {
@@ -96,10 +118,7 @@ impl Server {
             worker_thread,
         })
     }
-    fn handle_conn(
-        mut stream: TcpStream,
-        job_queue: mpsc::Sender<Job>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_conn(mut stream: TcpStream, job_queue: mpsc::Sender<Job>) -> Result<()> {
         tracing::debug!("handleconn() start");
         let mut inputbuf = [0u8; 4096];
         let bytes = stream.read(&mut inputbuf)?;
@@ -110,14 +129,17 @@ impl Server {
                 .to_string(),
             sender,
         };
-        job_queue.send(job)?;
-        while let Ok(row) = receiver.recv() {
-            let _ = stream.write(format!("{:?}\r\n", row).as_bytes())?;
-        }
+        job_queue.send(job).map_err(|_| Error::Unknown)?;
+        let reply = match receiver.recv() {
+            Ok(Ok(rows)) => format!("{rows:?}\r\n"),
+            Ok(Err(e)) => format!("ERROR: {e}\r\n"),
+            Err(_) => "ERROR: database worker unavailable\r\n".to_string(),
+        };
+        stream.write_all(reply.as_bytes())?;
         tracing::debug!("handleconn() finished");
         Ok(())
     }
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(&mut self) -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:6767")?;
         tracing::info!("Listening on port: 6767");
         loop {
@@ -125,8 +147,47 @@ impl Server {
             tracing::info!("Accepted connection from {}", addr);
             let sender = self.job_queue.clone();
             std::thread::spawn(move || {
-                Self::handle_conn(stream, sender).unwrap();
+                if let Err(e) = Self::handle_conn(stream, sender) {
+                    tracing::error!("connection error: {e}");
+                }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        tables::{ColumnDefinition, TableSchema},
+        value::DataType,
+    };
+    use tempfile::tempdir;
+
+    fn setup_db() -> (tempfile::TempDir, Database) {
+        let dir = tempdir().unwrap();
+        let sm = StorageManager::new(dir.path()).unwrap();
+        let bp = BufferPool::new(16, ReplacementStrategy::Clock, sm).unwrap();
+        let mut db = Database::open(dir.path().into(), bp).unwrap();
+        let schema = TableSchema::new(&[
+            ColumnDefinition::new("id".into(), DataType::Int, false).unwrap(),
+            ColumnDefinition::new("name".into(), DataType::VarChar, true).unwrap(),
+        ]);
+        db.create_table("users", &schema).unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn query_error_does_not_prevent_later_queries() {
+        let (_dir, mut db) = setup_db();
+
+        let err = execute_sql(&mut db, "select id from missing").unwrap_err();
+        assert!(matches!(err, Error::TableNotFound(table) if table == "missing"));
+
+        let parse_err = execute_sql(&mut db, "select asdf").unwrap_err();
+        assert!(matches!(parse_err, Error::ParseError(_)));
+
+        let rows = execute_sql(&mut db, "select id from users").unwrap();
+        assert!(rows.is_empty());
     }
 }

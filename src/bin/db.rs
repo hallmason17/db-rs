@@ -8,7 +8,7 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logger();
     let mut server = Server::new()?;
-    server.run()
+    Ok(server.run()?)
 }
 
 fn setup_logger() {
