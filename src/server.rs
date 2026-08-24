@@ -57,17 +57,23 @@ impl DbWorker {
                 }
             };
             let start = Instant::now();
-            let result = execute_sql(&mut self.db, &job.sql_string);
-            match &result {
-                Ok(rows) => {
-                    println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
+            let statements = job.sql_string.split(";");
+            for statement in statements {
+                if statement.is_empty() {
+                    continue;
                 }
-                Err(e) => {
-                    tracing::error!("query failed: {e}");
+                let result = execute_sql(&mut self.db, statement);
+                match &result {
+                    Ok(rows) => {
+                        println!("Returned {} rows in {:?}", rows.len(), start.elapsed());
+                    }
+                    Err(e) => {
+                        tracing::error!("query failed: {e}");
+                    }
                 }
-            }
-            if let Err(e) = job.sender.send(result) {
-                tracing::error!("failed to send query result to client: {e}");
+                if let Err(e) = job.sender.send(result) {
+                    tracing::error!("failed to send query result to client: {e}");
+                }
             }
         }
     }
@@ -130,12 +136,13 @@ impl Server {
             sender,
         };
         job_queue.send(job).map_err(|_| Error::Unknown)?;
-        let reply = match receiver.recv() {
-            Ok(Ok(rows)) => format!("{rows:?}\r\n"),
-            Ok(Err(e)) => format!("ERROR: {e}\r\n"),
-            Err(_) => "ERROR: database worker unavailable\r\n".to_string(),
-        };
-        stream.write_all(reply.as_bytes())?;
+        for message in receiver {
+            let reply = match message {
+                Ok(rows) => format!("{rows:?}\r\n"),
+                Err(e) => format!("ERROR: {e}\r\n"),
+            };
+            stream.write_all(reply.as_bytes())?;
+        }
         tracing::debug!("handleconn() finished");
         Ok(())
     }
